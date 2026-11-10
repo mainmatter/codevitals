@@ -1,0 +1,28 @@
+[package]
+name = "tally"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "string"] }
+duckdb = { version = "1.20000.1", features = ["bundled", "json"] }
+gix = "0.90.0"
+rayon = "1.12.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tree-sitter = "=0.26.2"
+tree-sitter-c = "=0.24.2"
+tree-sitter-cpp = "=0.23.4"
+tree-sitter-javascript = "=0.25.0"
+tree-sitter-python = "=0.25.0"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-typescript = "=0.23.2"
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+# The library is `extract` alone, so tests can call it; the binary is the rest.
+[lib]
+path = "src/extract.rs"

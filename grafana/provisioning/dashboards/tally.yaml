@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: tally
+    type: file
+    allowUiUpdates: true
+    options:
+      # Set by `tally-grafana`; points at grafana/dashboards.
+      path: $TALLY_DASHBOARDS
