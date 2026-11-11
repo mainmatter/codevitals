@@ -1,6 +1,6 @@
 //! Roles that a repository declares in its `.gitattributes` files, as GitHub's
 //! Linguist reads them: `linguist-vendored`, `linguist-generated` and
-//! `linguist-documentation`, plus `tally=<role>` for any role (`test`, `code`, ...).
+//! `linguist-documentation`, plus `codevitals=<role>` for any role (`test`, `code`, ...).
 //! An attribute turned off (`-linguist-vendored`, `linguist-generated=false`) says
 //! the path is first-party code whatever its path conventions suggest.
 
@@ -12,7 +12,7 @@ use gix::attrs::search::{MetadataCollection, Outcome};
 use gix::attrs::{Search, StateRef};
 use gix::glob::pattern::Case;
 
-/// The roles a `tally` attribute may name: those of `path_roles` in metrics.sql.
+/// The roles a `codevitals` attribute may name: those of `path_roles` in metrics.sql.
 pub const ROLES: &[&str] = &["vendored", "generated", "documentation", "test", "code"];
 
 /// The `.gitattributes` files of one commit's tree, and a matcher over them.
@@ -66,36 +66,30 @@ impl Attributes {
             Some(false),
             &mut out,
         );
+        // `codevitals` wins over Linguist's attributes; among those, the first listed role does.
         let mut role = None;
         for m in out.iter() {
-            let name = m.assignment.name.as_str();
-            let declared = match (name, m.assignment.state) {
-                ("tally", StateRef::Value(value)) => {
+            let declared = match (m.assignment.name.as_str(), m.assignment.state) {
+                ("codevitals", StateRef::Value(value)) => {
                     let value = value.as_bstr().to_string();
-                    match ROLES.iter().find(|r| **r == value) {
-                        Some(r) => Some(*r),
-                        None => bail!(
-                            "{path}: the .gitattributes value tally={value} is not a role; use one of {}",
+                    let Some(declared) = ROLES.iter().find(|r| **r == value) else {
+                        bail!(
+                            "{path}: the .gitattributes value codevitals={value} is not a role; use one of {}",
                             ROLES.join(", ")
-                        ),
-                    }
+                        );
+                    };
+                    return Ok(Some(declared));
                 }
-                ("linguist-vendored", StateRef::Set) => Some("vendored"),
-                ("linguist-generated", StateRef::Set) => Some("generated"),
-                ("linguist-documentation", StateRef::Set) => Some("documentation"),
+                ("linguist-vendored", StateRef::Set) => "vendored",
+                ("linguist-generated", StateRef::Set) => "generated",
+                ("linguist-documentation", StateRef::Set) => "documentation",
                 (
                     "linguist-vendored" | "linguist-generated" | "linguist-documentation",
                     StateRef::Unset,
-                ) => Some("code"),
-                _ => None,
+                ) => "code",
+                _ => continue,
             };
-            // `tally` wins over Linguist's attributes; among those, the first listed role does.
-            if let Some(declared) = declared {
-                if name == "tally" {
-                    return Ok(Some(declared));
-                }
-                role = role.or(Some(declared));
-            }
+            role.get_or_insert(declared);
         }
         Ok(role)
     }
@@ -106,12 +100,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nested_files_override_and_tally_wins() {
+    fn nested_files_override_and_codevitals_wins() {
         let mut a = Attributes::default();
         a.set(
             ".gitattributes",
             Some(
-                b"third/** linguist-vendored\n*.pb.go linguist-generated\nflow/** tally=test\n"
+                b"third/** linguist-vendored\n*.pb.go linguist-generated\nflow/** codevitals=test\n"
                     .to_vec(),
             ),
         );

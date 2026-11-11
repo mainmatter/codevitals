@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: codevitals
+    type: file
+    allowUiUpdates: true
+    options:
+      # Set by `cv-grafana`; points at grafana/dashboards.
+      path: $CODEVITALS_DASHBOARDS

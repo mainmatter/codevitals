@@ -1,7 +1,7 @@
 //! `extract`: a pure function from one blob's bytes to its span facts.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use tree_sitter::{Node, Parser, Point, QueryCursor, StreamingIterator};
@@ -125,7 +125,9 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         let hi = leaves.partition_point(|l| l.1 <= bytes.end);
         let inside = &leaves[lo..hi];
         let mut hashed = lang.name.as_bytes().to_vec();
-        inside.iter().for_each(|l| hashed.extend(l.2.to_le_bytes()));
+        for l in inside {
+            hashed.extend(l.2.to_le_bytes());
+        }
         let line = start.row + 1;
         let end_line = if end.column == 0 {
             end.row
@@ -163,7 +165,7 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
 
     // Spans come ordered by start, outer before inner, so the open spans of a kind
     // form a stack of end offsets: a span's depth is how many of them are still open.
-    let mut open = std::collections::HashMap::<&str, Vec<usize>>::new();
+    let mut open = HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
     for ((_, _, kind), (node, name, params)) in spans {
         let mut s = span(

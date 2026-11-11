@@ -1,17 +1,22 @@
 [package]
-name = "tally"
+name = "codevitals"
 version = "0.1.0"
 edition = "2024"
 description = "Records a git repository's history and the structure of its code into DuckDB, and computes code-health metrics over it in SQL"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mainmatter/tally"
+repository = "https://github.com/mainmatter/codevitals"
 readme = "README.md"
+
+[[bin]]
+name = "cv"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "string"] }
 duckdb = { version = "1.20000.1", features = ["bundled", "json"] }
 gix = "0.90.0"
+petgraph = { version = "0.8.3", default-features = false }
 rayon = "1.12.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

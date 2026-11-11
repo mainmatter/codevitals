@@ -4,9 +4,9 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use codevitals::{Lang, Span, extract};
 use duckdb::{Connection, params};
 use rayon::prelude::*;
-use tally::{Lang, Span, extract};
 use tracing::{debug, info, warn};
 
 use crate::db::{BATCH, SCHEMA, V, oid};
@@ -20,7 +20,7 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     let started = Instant::now();
     let stale = db.execute("delete from spans where v <> ?", [V])?;
     db.execute_batch(&format!(
-        "delete from tally; insert into tally values ({SCHEMA}, {V})"
+        "delete from codevitals; insert into codevitals values ({SCHEMA}, {V})"
     ))?;
     // Every path a blob ever had, in order: the blob is parsed in the language of the
     // first one with a known extension (an empty __init__.py shares its blob with
@@ -42,15 +42,12 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
                 .find_map(|(blob, path)| Some((blob, path, Lang::of(path)?)))
         })
         .collect();
-    let unknown = candidates.len() - todo.len();
-    let threads = rayon::current_num_threads();
-    let listed = started.elapsed();
     info!(
         blobs = todo.len(),
-        unknown_language = unknown,
+        unknown_language = candidates.len() - todo.len(),
         stale_spans = stale,
-        threads,
-        ?listed,
+        threads = rayon::current_num_threads(),
+        listed = ?started.elapsed(),
         "parse"
     );
 
@@ -113,42 +110,40 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
     while parsed.peek().is_some() {
         let tx = db.transaction()?;
         let mut spans = tx.appender("spans")?;
-        for (blob, lang, extracted) in parsed.by_ref().take(BATCH) {
+        for (blob, lang, content) in parsed.by_ref().take(BATCH) {
             written += 1;
-            let extracted = match extracted {
-                Content::Code(spans) => spans,
-                content @ (Content::Generated | Content::Skipped) => {
-                    let null = None::<i32>;
-                    let kinds: &[&str] = match content {
-                        Content::Generated => &["file", "generated"],
-                        _ => &["file"],
-                    };
-                    for kind in kinds {
+            // Blobs that are not parsed get rows with NULL counts.
+            let unparsed: &[&str] = match content {
+                Content::Code(extracted) => {
+                    for s in extracted {
                         spans.append_row(params![
-                            blob, V, lang.name, kind, null, 1, null, null, null, null, null, null,
-                            null, null, null
+                            blob,
+                            V,
+                            lang.name,
+                            s.kind,
+                            s.name,
+                            s.line,
+                            s.end_line,
+                            s.tokens,
+                            s.comments,
+                            s.params,
+                            s.hash,
+                            s.errors,
+                            s.start_byte,
+                            s.end_byte,
+                            s.depth
                         ])?;
                     }
-                    continue;
+                    &[]
                 }
+                Content::Generated => &["file", "generated"],
+                Content::Skipped => &["file"],
             };
-            for s in extracted {
+            let null = None::<i32>;
+            for kind in unparsed {
                 spans.append_row(params![
-                    blob,
-                    V,
-                    lang.name,
-                    s.kind,
-                    s.name,
-                    s.line,
-                    s.end_line,
-                    s.tokens,
-                    s.comments,
-                    s.params,
-                    s.hash,
-                    s.errors,
-                    s.start_byte,
-                    s.end_byte,
-                    s.depth
+                    blob, V, lang.name, kind, null, 1, null, null, null, null, null, null, null,
+                    null, null
                 ])?;
             }
         }
@@ -220,15 +215,12 @@ const GENERATED_MARKERS: &[&str] = &[
 /// Whether `src` is generated code: a marker in its first five lines, or, for
 /// JavaScript and TypeScript, minified (lines averaging over 110 bytes).
 fn is_generated(lang: Lang, src: &[u8]) -> bool {
-    let head: Vec<u8> = src
-        .split(|&b| b == b'\n')
-        .take(5)
-        .flat_map(|line| line.iter().copied().chain(*b"\n"))
-        .map(|b| b.to_ascii_lowercase())
-        .collect();
-    let marked = GENERATED_MARKERS
-        .iter()
-        .any(|m| head.windows(m.len()).any(|w| w == m.as_bytes()));
+    let marked = src.split(|&b| b == b'\n').take(5).any(|line| {
+        let line = line.to_ascii_lowercase();
+        GENERATED_MARKERS
+            .iter()
+            .any(|m| line.windows(m.len()).any(|w| w == m.as_bytes()))
+    });
     let lines = src.iter().filter(|&&b| b == b'\n').count().max(1);
     let ecma = ["typescript", "tsx", "javascript"].contains(&lang.name);
     marked || (ecma && src.len() / lines > 110)

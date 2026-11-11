@@ -1,4 +1,4 @@
-//! Helpers shared by the integration tests: running tally, querying its database,
+//! Helpers shared by the integration tests: running codevitals, querying its database,
 //! building git repositories in process, and writing facts directly.
 #![allow(dead_code)] // each test file uses a different subset
 
@@ -9,25 +9,39 @@ use gix::ObjectId;
 use gix::objs::tree::EntryKind;
 use tempfile::TempDir;
 
-/// Runs tally against the database in `dir`, and for `scan` the repository in `dir/repo`.
-pub fn tally(dir: &TempDir, args: &[&str]) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tally"));
+/// Runs codevitals against the database in `dir`, and for `scan` the repository in `dir/repo`.
+pub fn cv(dir: &TempDir, args: &[&str]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_cv"));
     cmd.env("RUST_LOG", "off"); // stderr carries only the summary line
     cmd.args(args).arg("--db").arg(db(dir));
     if args[0] == "scan" {
-        cmd.arg("--repo").arg(dir.path().join("repo"));
+        cmd.arg(dir.path().join("repo"));
     }
     cmd.output().unwrap()
 }
 
+/// Runs codevitals, which must succeed, and returns its stdout.
+pub fn succeeds(dir: &TempDir, args: &[&str]) -> String {
+    let out = cv(dir, args);
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(out.status.success(), "{err}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Runs codevitals, which must fail, and returns its stderr.
+pub fn fails(dir: &TempDir, args: &[&str]) -> String {
+    let out = cv(dir, args);
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(!out.status.success(), "{err}");
+    err
+}
+
+/// Scans `rev`, which must succeed, and returns the summary line.
 pub fn scan(dir: &TempDir, rev: &str) -> String {
-    let out = tally(dir, &["scan", rev]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stderr).unwrap()
+    let out = cv(dir, &["scan", "--rev", rev]);
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(out.status.success(), "{err}");
+    err
 }
 
 pub fn db(dir: &TempDir) -> PathBuf {
@@ -54,6 +68,12 @@ pub fn rows(dir: &TempDir, query: &str) -> String {
         .collect::<Result<_, _>>()
         .unwrap();
     rows.join(" ")
+}
+
+/// Asserts that `query` gives `expected`, rendered as `rows` renders it.
+#[track_caller]
+pub fn assert_rows(dir: &TempDir, query: &str, expected: impl AsRef<str>) {
+    assert_eq!(rows(dir, query), expected.as_ref(), "{query}");
 }
 
 pub fn execute(dir: &TempDir, sql: &str) {
@@ -195,7 +215,7 @@ pub fn fixture_named(add: &str, plus: &str, d: &str) -> Repo {
 /// tests that write facts directly with `history`.
 pub fn facts(history: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
-    execute(&dir, tally::SQL);
+    execute(&dir, codevitals::SQL);
     execute(&dir, history);
     dir
 }
@@ -219,6 +239,6 @@ pub fn random_history(
            from range({first}, {last}) c(seq), range({files}) g(f)
            qualify row_number() over (partition by seq order by md5(seq || ':' || f)) <= {per_commit};
          insert into spans (blob, v, lang, kind, line, tokens)
-           select blob, 3, 'rust', 'file', 1, 1 from changes where seq >= {first};"
+           select blob, 1, 'rust', 'file', 1, 1 from changes where seq >= {first};"
     )
 }

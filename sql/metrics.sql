@@ -2,12 +2,14 @@
 -- `CATEGORY: Title`; What, Read and Trend follow (help, dashboard).
 
 create or replace view metrics.size as
-select seq, sum(tokens) as value, sum(files) as files
+select seq, sum(tokens) as value, sum(files) as files,
+       sum(tokens) filter (lang_family(lang) = 'c') as c, sum(tokens) filter (lang_family(lang) = 'rust') as rust,
+       sum(tokens) filter (lang_family(lang) = 'python') as python, sum(tokens) filter (lang_family(lang) = 'ecma') as ecma
 from code_totals group by seq;
 
 comment on view metrics.size is 'SIZE: Production code size
 
-What: production code at each commit, in tokens (value) and files; tests, vendored and non-code files excluded.
+What: production code at each commit, in tokens (value) and files, and in tokens per language (c, rust, python, ecma); tests, vendored and non-code files excluded.
 
 Read: context, not a score. A step marks a bulk commit, which often moves other charts too.
 
@@ -79,17 +81,20 @@ qualify count(*) over (partition by seq) <= max_commit_files();
 
 create or replace view metrics.change_entropy as
 with f as (select w.win, c.path, sum(c.w) as w from windows w join change_weights c using (seq) group by all),
-p as (select win, w / sum(w) over (partition by win) as p from f),
+p as (select win, family(path) as family, w / sum(w) over (partition by win) as p,
+            w / sum(w) over (partition by win, family(path)) as p_family from f),
 commits as (select w.win, avg(k) as files_per_commit, count(*) as commits, any_value(w.span_weeks) as span_weeks
             from windows w join (select distinct seq, k from change_weights) using (seq) group by w.win)
 select win as seq, 1 / sum(p * p) as value, any_value(c.files_per_commit) as files_per_commit,
        power(2, -sum(p * log2(p))) as effective_files_h, any_value(c.commits) as commits,
-       any_value(c.span_weeks) as span_weeks
+       any_value(c.span_weeks) as span_weeks,
+       1 / sum(p_family * p_family) filter (family = 'c') as c, 1 / sum(p_family * p_family) filter (family = 'rust') as rust,
+       1 / sum(p_family * p_family) filter (family = 'python') as python, 1 / sum(p_family * p_family) filter (family = 'ecma') as ecma
 from p join commits c using (win) group by win;
 
 comment on view metrics.change_entropy is 'ENTROPY: Work spread: effective files
 
-What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once.
+What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once. Per language (c, rust, python, ecma): over how many of that language''s files its share of the work is spread.
 
 Read: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.
 
@@ -97,14 +102,16 @@ Trend: rising means more places change at once. It predicted faults well in open
 
 create or replace view metrics.encapsulation as
 select seq, sum(private_tokens) / sum(fn_tokens) as value,
-       map(list(lang order by lang), list(private_tokens / fn_tokens order by lang)) as by_language
+       map(list(lang order by lang), list(private_tokens / fn_tokens order by lang)) as by_language,
+       family_ratio(private_tokens, fn_tokens, lang, 'c') as c, family_ratio(private_tokens, fn_tokens, lang, 'rust') as rust,
+       family_ratio(private_tokens, fn_tokens, lang, 'python') as python, family_ratio(private_tokens, fn_tokens, lang, 'ecma') as ecma
 from code_totals where fn_tokens > 0 group by seq;
 
 comment on view metrics.encapsulation is 'STRUCTURE: Encapsulated code share
 
-What: the share of function code in non-public functions (no pub, static, not exported, leading underscore). Higher is better.
+What: the share of function code in non-public functions (no pub, static, not exported, leading underscore), overall and per language (c, rust, python, ecma). Higher is better.
 
-Read: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare by_language over time.
+Read: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare each language over time, not languages with each other.
 
 Trend: falling means the public surface grows faster than the code behind it.';
 
@@ -138,12 +145,14 @@ totals as (
   from grid g asof join running r on g.lang = r.lang and g.seq >= r.seq
   where r.tokens > 0)
 select seq, sum(duplicated) / sum(tokens) as value,
-       map(list(lang order by lang), list(duplicated / tokens order by lang)) as by_language
+       map(list(lang order by lang), list(duplicated / tokens order by lang)) as by_language,
+       family_ratio(duplicated, tokens, lang, 'c') as c, family_ratio(duplicated, tokens, lang, 'rust') as rust,
+       family_ratio(duplicated, tokens, lang, 'python') as python, family_ratio(duplicated, tokens, lang, 'ecma') as ecma
 from totals group by seq;
 
 comment on view metrics.duplication is 'STRUCTURE: Duplicated code share
 
-What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals. Lower is better.
+What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.
 
 Read: 0.05 means 5% of it has a structural twin.
 
@@ -151,14 +160,16 @@ Trend: rising means copy-paste instead of reuse. Whole-function clones only. Unv
 
 create or replace view metrics.concentration as
 select seq, sum(large_tokens) / sum(fn_tokens) as value,
-       map(list(lang order by lang), list(large_tokens / fn_tokens order by lang)) as by_language
+       map(list(lang order by lang), list(large_tokens / fn_tokens order by lang)) as by_language,
+       family_ratio(large_tokens, fn_tokens, lang, 'c') as c, family_ratio(large_tokens, fn_tokens, lang, 'rust') as rust,
+       family_ratio(large_tokens, fn_tokens, lang, 'python') as python, family_ratio(large_tokens, fn_tokens, lang, 'ecma') as ecma
 from code_totals where fn_tokens > 0 group by seq;
 
 comment on view metrics.concentration is 'STRUCTURE: Code in large functions
 
-What: the share of function code in functions over 200 tokens. Lower is better.
+What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.
 
-Read: 0.5 means half of it sits in large functions. Compare by_language over time.
+Read: 0.5 means half of it sits in large functions. Compare each language over time.
 
 Trend: rising means logic piles up in a few large functions. Unvalidated.';
 
@@ -186,26 +197,30 @@ Trend: falling means more people change code nobody owns, which went with more d
 
 create or replace view metrics.decisions as
 select seq, 100 * sum(decisions) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(100 * decisions / nullif(tokens, 0) order by lang)) as by_language
+       map(list(lang order by lang), list(100 * decisions / nullif(tokens, 0) order by lang)) as by_language,
+       100 * family_ratio(decisions, tokens, lang, 'c') as c, 100 * family_ratio(decisions, tokens, lang, 'rust') as rust,
+       100 * family_ratio(decisions, tokens, lang, 'python') as python, 100 * family_ratio(decisions, tokens, lang, 'ecma') as ecma
 from code_totals group by seq;
 
 comment on view metrics.decisions is 'COMPLEXITY: Decision points per 100 tokens
 
-What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens.
+What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).
 
-Read: 5 means one decision every 20 tokens. Languages differ: compare by_language over time.
+Read: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.
 
 Trend: rising means more paths to understand and test per line. Unvalidated.';
 
 create or replace view metrics.nesting as
 select seq, sum(nested_tokens) / nullif(sum(fn_tokens), 0) as value,
        sum(deep_tokens) / nullif(sum(fn_tokens), 0) as deep_share,
-       map(list(lang order by lang), list(nested_tokens / nullif(fn_tokens, 0) order by lang)) as by_language
+       map(list(lang order by lang), list(nested_tokens / nullif(fn_tokens, 0) order by lang)) as by_language,
+       family_ratio(nested_tokens, fn_tokens, lang, 'c') as c, family_ratio(nested_tokens, fn_tokens, lang, 'rust') as rust,
+       family_ratio(nested_tokens, fn_tokens, lang, 'python') as python, family_ratio(nested_tokens, fn_tokens, lang, 'ecma') as ecma
 from code_totals group by seq;
 
 comment on view metrics.nesting is 'COMPLEXITY: Block nesting below function body
 
-What: how many blocks deep function code sits below the function body, weighted by tokens; deep_share is the code in functions nested more than 3 deep.
+What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.
 
 Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.
 
@@ -213,27 +228,31 @@ Trend: rising means more conditions to keep in mind while reading. Unvalidated.'
 
 create or replace view metrics.global_state as
 select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language
+       map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(global_state, tokens, lang, 'c') as c, 1000 * family_ratio(global_state, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(global_state, tokens, lang, 'python') as python, 1000 * family_ratio(global_state, tokens, lang, 'ecma') as ecma
 from code_totals group by seq;
 
 comment on view metrics.global_state is 'NONLOCAL: Global mutable state per 1,000 tokens
 
-What: declarations of global mutable state per 1,000 production tokens: Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
+What: declarations of global mutable state per 1,000 production tokens, overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
 
-Read: the forms differ: compare by_language over time.
+Read: the forms differ: compare each language over time, not languages with each other.
 
 Trend: rising means behaviour depends on more state outside the code in view.';
 
 create or replace view metrics.exceptions as
 select seq, 1000 * sum(throws) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(1000 * throws / nullif(tokens, 0) order by lang)) as by_language
+       map(list(lang order by lang), list(1000 * throws / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(throws, tokens, lang, 'c') as c, 1000 * family_ratio(throws, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(throws, tokens, lang, 'python') as python, 1000 * family_ratio(throws, tokens, lang, 'ecma') as ecma
 from code_totals group by seq;
 
 comment on view metrics.exceptions is 'NONLOCAL: Throws and panics per 1,000 tokens
 
-What: non-local exits per 1,000 production tokens: throw, raise, Rust panics, unwrap and expect, C longjmp.
+What: non-local exits per 1,000 production tokens, overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp.
 
-Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare by_language.
+Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.
 
 Trend: rising means control leaves functions in more places a caller cannot see. Unvalidated.';
 
@@ -327,7 +346,7 @@ from per_family group by seq;
 
 comment on view metrics.import_coverage is 'DEPENDENCIES: How complete the dependency metrics are, per language
 
-What: the share of each language''s imports of this repository''s own code that tally could follow to a file, each week (c, rust, python, ecma).
+What: the share of each language''s imports of this repository''s own code that codevitals could follow to a file, each week (c, rust, python, ecma).
 
 Read: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.
 

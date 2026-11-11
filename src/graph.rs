@@ -9,6 +9,8 @@ use std::time::Instant;
 
 use anyhow::Result;
 use duckdb::{Connection, params};
+use petgraph::algo::kosaraju_scc;
+use petgraph::graph::{DiGraph, NodeIndex};
 use tracing::info;
 
 /// Where `derive` puts the cones: the stored table (by `scan`), or a temp table of the
@@ -26,41 +28,39 @@ pub enum Cones {
 /// families whose edges it changes, over the files that have edges at that commit.
 pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
     let start = Instant::now();
-    let events: Vec<(i32, i32, String, String, String)> = db
+    // Files and families by dense id, numbered as they first appear.
+    let (mut files, mut families) = (HashMap::new(), HashMap::new());
+    let intern = |ids: &mut HashMap<String, usize>, name: String| {
+        let next = ids.len();
+        *ids.entry(name).or_insert(next)
+    };
+    let events: Vec<(i32, i32, usize, usize, usize)> = db
         .prepare(
             "select since, 1, source, target, family(source) from import_edges
              union all select until, -1, source, target, family(source) from import_edges
              order by 1",
         )?
         .query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                intern(&mut files, r.get(2)?),
+                intern(&mut files, r.get(3)?),
+                intern(&mut families, r.get(4)?),
+            ))
         })?
         .collect::<Result<_, _>>()?;
-
-    let mut ids = HashMap::<String, usize>::new();
-    let mut names = Vec::<String>::new();
-    let mut id = |name: String| {
-        *ids.entry(name).or_insert_with_key(|n| {
-            names.push(n.clone());
-            names.len() - 1
-        })
-    };
-    let mut family_ids = HashMap::<String, usize>::new();
-    let events: Vec<(i32, i32, usize, usize, usize)> = events
-        .into_iter()
-        .map(|(seq, delta, s, t, family)| {
-            let next = family_ids.len();
-            let family = *family_ids.entry(family).or_insert(next);
-            (seq, delta, id(s), id(t), family)
-        })
-        .collect();
+    let mut names = vec![String::new(); files.len()];
+    for (name, id) in files {
+        names[id] = name;
+    }
 
     let mut adj = vec![BTreeSet::new(); names.len()];
     let mut indegree = vec![0usize; names.len()];
     // import_edges has one row per import, so a pair of files can have several at once:
     // the pair is an edge while it has any.
     let mut imports = HashMap::<(usize, usize), u32>::new();
-    let mut members = vec![BTreeSet::<usize>::new(); family_ids.len()]; // files ever in each family's graph
+    let mut members = vec![BTreeSet::<usize>::new(); families.len()]; // files ever in each family's graph
     let mut open = HashMap::<usize, (i32, u32, u32)>::new(); // file -> (since, cone, scc)
     let mut rows = Vec::<(usize, i32, i32, u32, u32)>::new();
     let mut passes = 0;
@@ -121,21 +121,23 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
     );
 
     let tx = db.transaction()?;
-    match into {
-        Cones::Stored => tx.execute_batch("delete from main.cones")?,
-        Cones::Temp => tx.execute_batch(
-            "create or replace temp table cones as select * from main.cones limit 0",
-        )?,
-    }
-    {
-        let mut app = match into {
-            Cones::Stored => tx.appender("cones")?,
-            Cones::Temp => tx.appender_to_catalog_and_db("cones", "temp", "main")?,
-        };
-        for &(file, since, until, cone, scc) in &rows {
-            app.append_row(params![names[file], since, until, cone, scc])?;
+    let mut app = match into {
+        Cones::Stored => {
+            tx.execute_batch("delete from main.cones")?;
+            tx.appender("cones")?
         }
+        Cones::Temp => {
+            tx.execute_batch(
+                "create or replace temp table cones as select * from main.cones limit 0",
+            )?;
+            tx.appender_to_catalog_and_db("cones", "temp", "main")?
+        }
+    };
+    for &(file, since, until, cone, scc) in &rows {
+        app.append_row(params![names[file], since, until, cone, scc])?;
     }
+    app.flush()?;
+    drop(app);
     tx.commit()?;
     info!(
         files = names.len(),
@@ -148,82 +150,39 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
 }
 
 /// For every node: how many other nodes it reaches, and the size of its strongly
-/// connected component. Tarjan's algorithm (iterative, so deep chains cannot
-/// overflow the stack) emits components sinks first, so each component's reach is
+/// connected component. Kosaraju's algorithm (iterative, so deep chains cannot
+/// overflow the stack) yields components sinks first, so each component's reach is
 /// its members plus the reach of components it points to, all already known.
 fn cones(adj: &[BTreeSet<usize>]) -> Vec<(u32, u32)> {
-    const NONE: usize = usize::MAX;
-    let n = adj.len();
-    let words = n.div_ceil(64);
-    let (mut index, mut low, mut comp) = (vec![NONE; n], vec![0; n], vec![NONE; n]);
-    let (mut stack, mut on_stack) = (Vec::new(), vec![false; n]);
-    let mut reach: Vec<Vec<u64>> = Vec::new(); // per component, in emission order
-    let mut sizes = Vec::new();
-    let mut next = 0;
-    for root in 0..n {
-        if index[root] != NONE {
-            continue;
-        }
-        // Each frame: a node and the successors still to visit.
-        let mut frames = vec![(root, adj[root].iter())];
-        index[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some((v, succ)) = frames.last_mut() {
-            let v = *v;
-            if let Some(&w) = succ.next() {
-                if index[w] == NONE {
-                    index[w] = next;
-                    low[w] = next;
-                    next += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    frames.push((w, adj[w].iter()));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
-            }
-            frames.pop();
-            if let Some(&(parent, _)) = frames.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-            if low[v] == index[v] {
-                let c = reach.len();
-                let mut bits = vec![0u64; words];
-                let mut members = Vec::new();
-                loop {
-                    let w = stack.pop().expect("v is on the stack");
-                    on_stack[w] = false;
-                    comp[w] = c;
-                    bits[w / 64] |= 1 << (w % 64);
-                    members.push(w);
-                    if w == v {
-                        break;
-                    }
-                }
-                for &m in &members {
-                    for &w in &adj[m] {
-                        if comp[w] != c {
-                            assert!(comp[w] < c, "successor components are emitted first");
-                            for (b, r) in bits.iter_mut().zip(&reach[comp[w]]) {
-                                *b |= r;
-                            }
-                        }
-                    }
-                }
-                reach.push(bits);
-                sizes.push(members.len());
-            }
+    let mut graph = DiGraph::<(), ()>::with_capacity(adj.len(), 0);
+    adj.iter().for_each(|_| _ = graph.add_node(()));
+    for (s, targets) in adj.iter().enumerate() {
+        for &t in targets {
+            graph.add_edge(NodeIndex::new(s), NodeIndex::new(t), ());
         }
     }
-    (0..n)
-        .map(|v| {
-            let c = comp[v];
+    let (mut comp, mut reach) = (vec![usize::MAX; adj.len()], Vec::<Vec<u64>>::new());
+    let sccs = kosaraju_scc(&graph);
+    for (c, members) in sccs.iter().enumerate() {
+        let mut bits = vec![0u64; adj.len().div_ceil(64)];
+        for m in members.iter().map(|m| m.index()) {
+            comp[m] = c;
+            bits[m / 64] |= 1 << (m % 64);
+        }
+        for &w in members.iter().flat_map(|m| &adj[m.index()]) {
+            if comp[w] != c {
+                assert!(comp[w] < c, "successor components come first");
+                for (b, r) in bits.iter_mut().zip(&reach[comp[w]]) {
+                    *b |= r;
+                }
+            }
+        }
+        reach.push(bits);
+    }
+    comp.iter()
+        .map(|&c| {
             let reached: u32 = reach[c].iter().map(|w| w.count_ones()).sum();
-            (reached - 1, u32::try_from(sizes[c]).expect("fits"))
+            (reached - 1, u32::try_from(sccs[c].len()).expect("fits"))
         })
         .collect()
 }
@@ -280,5 +239,9 @@ mod tests {
             let actual: Vec<u32> = cones(&adj).into_iter().map(|(c, _)| c).collect();
             assert_eq!(actual, expected, "n = {n}");
         }
+        // A chain far deeper than a recursive search could follow on a test thread's 2 MiB stack.
+        let n = 30_000;
+        let chain = graph(n, &(1..n).map(|i| (i - 1, i)).collect::<Vec<_>>());
+        assert_eq!(cones(&chain)[0], (u32::try_from(n - 1).unwrap(), 1));
     }
 }

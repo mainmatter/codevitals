@@ -1,8 +1,8 @@
 {
-  "uid": "tally",
-  "title": "tally",
+  "uid": "codevitals",
+  "title": "codevitals",
   "tags": [
-    "tally"
+    "codevitals"
   ],
   "editable": true,
   "schemaVersion": 39,
@@ -45,7 +45,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.\nChange and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits. The shaded band is a 95% confidence interval: movement inside it is noise. A dashed line at 1 marks chance: files are as far apart in the directory tree as at random.\nDependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.\nNo metric is validated against defects yet: read trends within this repository, not absolute values."
+        "content": "**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.\nChange and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits. The shaded band is a 95% confidence interval: movement inside it is noise. A dashed line at 1 marks chance: files are as far apart in the directory tree as at random.\nRows marked \"(by language)\" repeat the row above with one line per language. Complexity, non-local and dependency charts draw one line per language and a heavier one for all languages combined, which also moves when the language mix changes. A file's *reach* is the files it depends on through its imports and theirs.\nNo metric is validated against defects yet: read trends within this repository, not absolute values."
       }
     },
     {
@@ -65,7 +65,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Production code size",
-      "description": "What: production code at each commit, in tokens (value) and files; tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
+      "description": "What: production code at each commit, in tokens (value) and files, and in tokens per language (c, rust, python, ecma); tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -135,7 +135,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -150,7 +150,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d95926"
+                  "fixedColor": "#9085e9"
                 }
               },
               {
@@ -180,7 +180,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "How changes spread",
+      "title": "Size (by language)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -193,6 +193,167 @@
     {
       "id": 5,
       "type": "timeseries",
+      "title": "Production code size (by language)",
+      "description": "What: production code at each commit, in tokens (value) and files, and in tokens per language (c, rust, python, ecma); tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.size",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "How changes spread",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
       "title": "Distance between files changed together (vs chance) ↓",
       "description": "What: how far apart in the directory tree the files changed by one commit are, relative to chance, over the last 100 code commits each week. Lower is better.\n\nRead: 1 means changes pair up files as if at random; below 1, a commit's files sit close together. observed is the mean distance in directory steps (0: same directory, 2: sibling directories), expected its chance level. The shaded band is a 95% confidence interval for this average: movement inside it is noise.\n\nTrend: rising means work spreads across the tree: what changes together does not live together. Change coupling correlates with defects.",
       "datasource": {
@@ -203,7 +364,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 25
       },
       "targets": [
         {
@@ -285,7 +446,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -300,7 +461,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d95926"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -327,7 +488,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#199e70"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -359,7 +520,7 @@
       }
     },
     {
-      "id": 6,
+      "id": 8,
       "type": "timeseries",
       "title": "Rework within 7 days ↓",
       "description": "What: the share of edits to files already changed in the previous 7 days, over the last 100 code commits each week. Lower is better.\n\nRead: 0.2 means a fifth of a typical commit's edits rework last week's code. Expect high values during feature work.\n\nTrend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.",
@@ -371,7 +532,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 15
+        "y": 25
       },
       "targets": [
         {
@@ -437,7 +598,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -452,7 +613,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d95926"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -479,7 +640,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#199e70"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -511,7 +672,7 @@
       }
     },
     {
-      "id": 7,
+      "id": 9,
       "type": "timeseries",
       "title": "File ownership by top author ↑",
       "description": "What: for files changed at least twice in the last 100 code commits, the share of changes made by their most active author, each week. Higher is better.\n\nRead: 0.8 means a typical file's main author made 80% of its changes. The shaded band is a 95% confidence interval for this average: movement inside it is noise.\n\nTrend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.",
@@ -523,7 +684,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 15
+        "y": 25
       },
       "targets": [
         {
@@ -589,7 +750,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -604,7 +765,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d95926"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -631,7 +792,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#199e70"
+                  "fixedColor": "text"
                 }
               },
               {
@@ -663,7 +824,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 10,
       "type": "row",
       "title": "Entropy of change",
       "collapsed": false,
@@ -671,15 +832,15 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 34
       },
       "panels": []
     },
     {
-      "id": 9,
+      "id": 11,
       "type": "timeseries",
       "title": "Work spread: effective files",
-      "description": "What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
+      "description": "What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once. Per language (c, rust, python, ecma): over how many of that language's files its share of the work is spread.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -688,7 +849,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 35
       },
       "targets": [
         {
@@ -753,7 +914,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -768,7 +929,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#d95926"
+                  "fixedColor": "#9085e9"
                 }
               },
               {
@@ -796,7 +957,172 @@
       }
     },
     {
-      "id": 10,
+      "id": 12,
+      "type": "row",
+      "title": "Entropy of change (by language)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Work spread: effective files (by language)",
+      "description": "What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once. Per language (c, rust, python, ecma): over how many of that language's files its share of the work is spread.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.change_entropy",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 2
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 14,
       "type": "row",
       "title": "Code structure",
       "collapsed": false,
@@ -804,15 +1130,15 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 54
       },
       "panels": []
     },
     {
-      "id": 11,
+      "id": 15,
       "type": "timeseries",
       "title": "Encapsulated code share ↑",
-      "description": "What: the share of function code in non-public functions (no pub, static, not exported, leading underscore). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare by_language over time.\n\nTrend: falling means the public surface grows faster than the code behind it.",
+      "description": "What: the share of function code in non-public functions (no pub, static, not exported, leading underscore), overall and per language (c, rust, python, ecma). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare each language over time, not languages with each other.\n\nTrend: falling means the public surface grows faster than the code behind it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -821,7 +1147,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 35
+        "y": 55
       },
       "targets": [
         {
@@ -877,7 +1203,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -897,10 +1223,10 @@
       }
     },
     {
-      "id": 12,
+      "id": 16,
       "type": "timeseries",
       "title": "Duplicated code share ↓",
-      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals. Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
+      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -909,7 +1235,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 35
+        "y": 55
       },
       "targets": [
         {
@@ -965,7 +1291,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -985,10 +1311,10 @@
       }
     },
     {
-      "id": 13,
+      "id": 17,
       "type": "timeseries",
       "title": "Code in large functions ↓",
-      "description": "What: the share of function code in functions over 200 tokens. Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare by_language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
+      "description": "What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare each language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -997,7 +1323,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 35
+        "y": 55
       },
       "targets": [
         {
@@ -1053,7 +1379,7 @@
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#3987e5"
+                  "fixedColor": "text"
                 }
               }
             ]
@@ -1071,505 +1397,11 @@
           "sort": "none"
         }
       }
-    },
-    {
-      "id": 14,
-      "type": "row",
-      "title": "Local complexity",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 44
-      },
-      "panels": []
-    },
-    {
-      "id": 15,
-      "type": "timeseries",
-      "title": "Decision points per 100 tokens",
-      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens.\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare by_language over time.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 45
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.decisions",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Decision points per 100 tokens",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Decision points per 100 tokens"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 16,
-      "type": "timeseries",
-      "title": "Block nesting below function body",
-      "description": "What: how many blocks deep function code sits below the function body, weighted by tokens; deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 45
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.nesting",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Block nesting below function body",
-              "type": "number"
-            },
-            {
-              "selector": "deep_share",
-              "text": "share nested deeper than 3",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Block nesting below function body"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "share nested deeper than 3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 17,
-      "type": "row",
-      "title": "Non-local control flow and state",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 54
-      },
-      "panels": []
     },
     {
       "id": 18,
-      "type": "timeseries",
-      "title": "Global mutable state per 1,000 tokens",
-      "description": "What: declarations of global mutable state per 1,000 production tokens: Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare by_language over time.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 0,
-        "y": 55
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.global_state",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Global mutable state per 1,000 tokens",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Global mutable state per 1,000 tokens"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 19,
-      "type": "timeseries",
-      "title": "Throws and panics per 1,000 tokens",
-      "description": "What: non-local exits per 1,000 production tokens: throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare by_language.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 8,
-        "y": 55
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.exceptions",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Throws and panics per 1,000 tokens",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Throws and panics per 1,000 tokens"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "type": "timeseries",
-      "title": "goto per 1,000 C/C++ tokens",
-      "description": "What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 16,
-        "y": 55
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.goto",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "goto per 1,000 C/C++ tokens",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "goto per 1,000 C/C++ tokens"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 21,
       "type": "row",
-      "title": "Dependencies through imports",
+      "title": "Code structure (by language)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1580,10 +1412,10 @@
       "panels": []
     },
     {
-      "id": 22,
+      "id": 19,
       "type": "timeseries",
-      "title": "Share of its language's code a file depends on ↓",
-      "description": "What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
+      "title": "Encapsulated code share (by language) ↑",
+      "description": "What: the share of function code in non-public functions (no pub, static, not exported, leading underscore), overall and per language (c, rust, python, ecma). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare each language over time, not languages with each other.\n\nTrend: falling means the public surface grows faster than the code behind it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -1609,7 +1441,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.dependency_reach",
+          "root_selector": "$.encapsulation",
           "format": "timeseries",
           "columns": [
             {
@@ -1728,10 +1560,10 @@
       }
     },
     {
-      "id": 23,
+      "id": 20,
       "type": "timeseries",
-      "title": "Distance imports reach (vs chance) ↓",
-      "description": "What: how far through the directory tree imports reach, relative to chance, each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means imports reach as far as if rewired at random; below 1, files mostly import their neighbours. edges is the number of importing file pairs.\n\nTrend: rising means code depends on code ever further away: the tree stops matching the structure. Moving files steps it.",
+      "title": "Duplicated code share (by language) ↓",
+      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -1757,13 +1589,327 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.import_distance",
+          "root_selector": "$.duplication",
           "format": "timeseries",
           "columns": [
             {
               "selector": "time",
               "text": "time",
               "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Code in large functions (by language) ↓",
+      "description": "What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare each language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 65
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.concentration",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Local complexity",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "panels": []
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Decision points per 100 tokens",
+      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.decisions",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
             },
             {
               "selector": "c",
@@ -1797,26 +1943,29 @@
             "lineWidth": 2,
             "spanNulls": false,
             "showPoints": "never",
-            "fillOpacity": 0,
-            "thresholdsStyle": {
-              "mode": "dashed"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "transparent",
-                "value": null
-              },
-              {
-                "color": "text",
-                "value": 1
-              }
-            ]
+            "fillOpacity": 0
           }
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -1894,17 +2043,17 @@
     {
       "id": 24,
       "type": "timeseries",
-      "title": "How complete the dependency metrics are, per language",
-      "description": "What: the share of each language's imports of this repository's own code that tally could follow to a file, each week (c, rust, python, ecma).\n\nRead: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency metrics became less complete, not that the code changed.",
+      "title": "Block nesting below function body",
+      "description": "What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
-        "w": 8,
-        "x": 16,
-        "y": 65
+        "w": 12,
+        "x": 12,
+        "y": 75
       },
       "targets": [
         {
@@ -1921,13 +2070,648 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.import_coverage",
+          "root_selector": "$.nesting",
           "format": "timeseries",
           "columns": [
             {
               "selector": "time",
               "text": "time",
               "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "Non-local control flow and state",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "panels": []
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Global mutable state per 1,000 tokens",
+      "description": "What: declarations of global mutable state per 1,000 production tokens, overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare each language over time, not languages with each other.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 85
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.global_state",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Throws and panics per 1,000 tokens",
+      "description": "What: non-local exits per 1,000 production tokens, overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 85
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.exceptions",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "goto per 1,000 C/C++ tokens",
+      "description": "What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 85
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.goto",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "goto per 1,000 C/C++ tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "goto per 1,000 C/C++ tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "row",
+      "title": "Dependencies through imports",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 94
+      },
+      "panels": []
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Share of its language's code a file depends on ↓",
+      "description": "What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 95
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.dependency_reach",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
             },
             {
               "selector": "c",
@@ -1965,6 +2749,385 @@
           }
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Distance imports reach (vs chance) ↓",
+      "description": "What: how far through the directory tree imports reach, relative to chance, each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means imports reach as far as if rewired at random; below 1, files mostly import their neighbours. edges is the number of importing file pairs.\n\nTrend: rising means code depends on code ever further away: the tree stops matching the structure. Moving files steps it.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 95
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.import_distance",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "How complete the dependency metrics are, per language",
+      "description": "What: the share of each language's imports of this repository's own code that codevitals could follow to a file, each week (c, rust, python, ecma).\n\nRead: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency metrics became less complete, not that the code changed.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 95
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.import_coverage",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",

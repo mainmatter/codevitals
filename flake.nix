@@ -1,5 +1,5 @@
 {
-  description = "tally: facts about a git repository's history, in DuckDB";
+  description = "codevitals: facts about a git repository's history, in DuckDB";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -38,7 +38,7 @@
         );
     in
     {
-      # `nix run github:mainmatter/tally -- scan`: the CLI, built with the pinned toolchain.
+      # `nix run github:mainmatter/codevitals -- scan`: the CLI, built with the pinned toolchain.
       packages = forAllSystems (
         pkgs:
         let
@@ -50,13 +50,13 @@
         in
         {
           default = rustPlatform.buildRustPackage {
-            pname = "tally";
+            pname = "codevitals";
             version = (lib.importTOML ./Cargo.toml).package.version;
             src = lib.cleanSource ./.;
             cargoLock.lockFile = ./Cargo.lock;
             # The tests need git and take minutes in a sandbox; CI runs them with cargo.
             doCheck = false;
-            meta.mainProgram = "tally";
+            meta.mainProgram = "cv";
           };
         }
       );
@@ -67,17 +67,17 @@
           rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
           # Grafana's plugin directory: one subdirectory per plugin id.
-          grafanaPlugins = pkgs.linkFarm "tally-grafana-plugins" [
+          grafanaPlugins = pkgs.linkFarm "codevitals-grafana-plugins" [
             {
               name = "yesoreyeram-infinity-datasource";
               path = pkgs.grafanaPlugins.yesoreyeram-infinity-datasource;
             }
           ];
 
-          # A throwaway local Grafana showing one `tally metrics` JSON file with the
+          # A throwaway local Grafana showing one `cv metrics` JSON file with the
           # prebuilt dashboard. State lives in a temporary directory; Ctrl-C stops it.
-          tally-grafana = pkgs.writeShellApplication {
-            name = "tally-grafana";
+          cv-grafana = pkgs.writeShellApplication {
+            name = "cv-grafana";
             runtimeInputs = [
               pkgs.grafana
               pkgs.python3
@@ -85,7 +85,7 @@
             text = ''
               metrics="''${1:-metrics.json}"
               if [ ! -f "$metrics" ]; then
-                echo "usage: tally-grafana [metrics.json]  (write it with: tally metrics metrics.json)" >&2
+                echo "usage: cv-grafana [metrics.json]  (write it with: cv metrics metrics.json)" >&2
                 exit 1
               fi
 
@@ -98,13 +98,13 @@
               server=$!
               trap 'kill "$server"; rm -rf "$state"' EXIT
 
-              echo "tally dashboard: http://127.0.0.1:3000/d/tally (serving $metrics)" >&2
+              echo "codevitals dashboard: http://127.0.0.1:3000/d/codevitals (serving $metrics)" >&2
               GF_PATHS_DATA="$state/data" \
               GF_PATHS_LOGS="$state/logs" \
               GF_PATHS_PLUGINS="${grafanaPlugins}" \
               GF_PATHS_PROVISIONING="${./grafana/provisioning}" \
-              TALLY_DASHBOARDS="${./grafana/dashboards}" \
-              GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH="${./grafana/dashboards}/tally.json" \
+              CODEVITALS_DASHBOARDS="${./grafana/dashboards}" \
+              GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH="${./grafana/dashboards}/codevitals.json" \
               GF_SERVER_HTTP_ADDR=127.0.0.1 \
               GF_SERVER_HTTP_PORT=3000 \
               GF_AUTH_ANONYMOUS_ENABLED=true \
@@ -128,17 +128,17 @@
           devOnlyInputs = [
             pkgs.duckdb
             pkgs.python3 # grafana/generate.py
-            tally-grafana
+            cv-grafana
           ];
         in
         {
           default = pkgs.mkShell {
-            name = "tally-dev";
+            name = "codevitals-dev";
             buildInputs = ciInputs ++ devOnlyInputs;
           };
 
           ci = pkgs.mkShell {
-            name = "tally-ci";
+            name = "codevitals-ci";
             buildInputs = ciInputs;
           };
         }

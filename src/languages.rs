@@ -1,4 +1,4 @@
-//! The languages tally parses: how a path selects one, its tree-sitter grammar, and
+//! The languages codevitals parses: how a path selects one, its tree-sitter grammar, and
 //! the query that captures its facts.
 
 use std::sync::OnceLock;
@@ -21,98 +21,42 @@ pub struct Lang {
 /// helper captures `@comment`, `@name`, `@params` and `@_*` (for predicates) create
 /// no span. A query capturing anything else fails to compile, so a typo cannot
 /// silently create a kind no SQL reads.
+#[rustfmt::skip]
 pub const KINDS: &[&str] = &[
-    "fn",
-    "call",
-    "import",
-    "module",
-    "pub",
-    "static",
-    "branch",
-    "condition",
-    "block",
-    "global_state",
-    "throw",
-    "goto",
-    "package",
-    "alias",
-    "alias_target",
-    "base_url",
-    // Not captured by a query: tally marks a blob of generated code with it.
+    "fn", "call", "import", "module", "pub", "static", "branch", "condition", "block",
+    "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
+    // Not captured by a query: codevitals marks a blob of generated code with it.
     "generated",
 ];
 
+const fn lang(
+    name: &'static str,
+    files: &'static [&'static str],
+    exts: &'static [&'static str],
+    grammar: fn() -> Language,
+    query: &'static str,
+) -> Lang {
+    Lang {
+        name,
+        files,
+        exts,
+        grammar,
+        query,
+    }
+}
+
+#[rustfmt::skip]
 pub const LANGS: &[Lang] = &[
-    Lang {
-        name: "rust",
-        files: &[],
-        exts: &["rs"],
-        grammar: || tree_sitter_rust::LANGUAGE.into(),
-        query: include_str!("../langs/rust.scm"),
-    },
-    Lang {
-        name: "c",
-        files: &[],
-        exts: &["c"],
-        grammar: || tree_sitter_c::LANGUAGE.into(),
-        query: include_str!("../langs/c.scm"),
-    },
-    Lang {
-        name: "cpp",
-        files: &[],
-        exts: &["h", "cc", "cpp", "cxx", "hh", "hpp", "hxx"],
-        grammar: || tree_sitter_cpp::LANGUAGE.into(),
-        query: include_str!("../langs/cpp.scm"),
-    },
-    Lang {
-        name: "python",
-        files: &[],
-        exts: &["py"],
-        grammar: || tree_sitter_python::LANGUAGE.into(),
-        query: include_str!("../langs/python.scm"),
-    },
-    Lang {
-        name: "typescript",
-        files: &[],
-        exts: &["ts", "mts", "cts"],
-        grammar: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-    Lang {
-        name: "tsx",
-        files: &[],
-        exts: &["tsx"],
-        grammar: || tree_sitter_typescript::LANGUAGE_TSX.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-    Lang {
-        name: "javascript",
-        files: &[],
-        exts: &["js", "mjs", "cjs", "jsx"],
-        grammar: || tree_sitter_javascript::LANGUAGE.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-    Lang {
-        name: "cargo",
-        files: &["Cargo.toml"],
-        exts: &[],
-        grammar: || tree_sitter_toml_ng::LANGUAGE.into(),
-        query: include_str!("../langs/cargo.scm"),
-    },
-    Lang {
-        name: "tsconfig",
-        files: &["tsconfig.json", "jsconfig.json", "tsconfig.base.json"],
-        exts: &[],
-        grammar: || tree_sitter_json::LANGUAGE.into(),
-        query: include_str!("../langs/tsconfig.scm"),
-    },
-    Lang {
-        name: "npm",
-        files: &["package.json"],
-        exts: &[],
-        grammar: || tree_sitter_json::LANGUAGE.into(),
-        query: include_str!("../langs/npm.scm"),
-    },
+    lang("rust", &[], &["rs"], || tree_sitter_rust::LANGUAGE.into(), include_str!("../langs/rust.scm")),
+    lang("c", &[], &["c"], || tree_sitter_c::LANGUAGE.into(), include_str!("../langs/c.scm")),
+    lang("cpp", &[], &["h", "cc", "cpp", "cxx", "hh", "hpp", "hxx"], || tree_sitter_cpp::LANGUAGE.into(), include_str!("../langs/cpp.scm")),
+    lang("python", &[], &["py"], || tree_sitter_python::LANGUAGE.into(), include_str!("../langs/python.scm")),
+    lang("typescript", &[], &["ts", "mts", "cts"], || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), include_str!("../langs/ecma.scm")),
+    lang("tsx", &[], &["tsx"], || tree_sitter_typescript::LANGUAGE_TSX.into(), include_str!("../langs/ecma.scm")),
+    lang("javascript", &[], &["js", "mjs", "cjs", "jsx"], || tree_sitter_javascript::LANGUAGE.into(), include_str!("../langs/ecma.scm")),
+    lang("cargo", &["Cargo.toml"], &[], || tree_sitter_toml_ng::LANGUAGE.into(), include_str!("../langs/cargo.scm")),
+    lang("tsconfig", &["tsconfig.json", "jsconfig.json", "tsconfig.base.json"], &[], || tree_sitter_json::LANGUAGE.into(), include_str!("../langs/tsconfig.scm")),
+    lang("npm", &["package.json"], &[], || tree_sitter_json::LANGUAGE.into(), include_str!("../langs/npm.scm")),
 ];
 
 impl Lang {

@@ -1,5 +1,5 @@
 # Push a tag (git tag v0.2.0 && git push --tags) to publish a release with a binary
-# per runner the tally action supports, named tally-<runner.os>-<runner.arch>.tar.gz.
+# per runner the codevitals action supports, named codevitals-<runner.os>-<runner.arch>.tar.gz.
 name: release
 on:
   push:
@@ -26,6 +26,6 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          asset="tally-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz"
-          tar -czf "$asset" -C target/release tally
+          asset="codevitals-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz"
+          tar -czf "$asset" -C target/release cv
           gh release upload "$GITHUB_REF_NAME" "$asset" --repo "$GITHUB_REPOSITORY"

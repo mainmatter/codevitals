@@ -1,4 +1,4 @@
-use tally::{LANGS, Lang, Span, extract};
+use codevitals::{LANGS, Lang, Span, extract};
 
 /// Kinds of control-flow structure, checked by `structure` instead of `check`.
 const STRUCTURE: [&str; 6] = [
@@ -84,16 +84,14 @@ fn plus 13 15 18 0 2 NULL
 /// Rust: functions, calls, imports, comments, visibility and control-flow structure.
 #[test]
 fn rust() {
-    {
-        // Calls through paths, methods and turbofish; `pub` markers.
-        let src = "pub fn a() { b(); x::c(); self.d(); e::<u8>(); s.f::<T>(); }
+    // Calls through paths, methods and turbofish; `pub` markers.
+    check(
+        "x.rs",
+        "pub fn a() { b(); x::c(); self.d(); e::<u8>(); s.f::<T>(); }
 fn b() {}
 pub(crate) fn g() {}
-";
-        check(
-            "x.rs",
-            src,
-            r#"file NULL 1 3 57 0 NULL 0
+",
+        r#"file NULL 1 3 57 0 NULL 0
 fn a 1 1 41 0 0 NULL
 pub NULL 1 1 41 0 NULL NULL
 call b 1 1 3 0 NULL NULL
@@ -105,10 +103,10 @@ fn b 2 2 6 0 0 NULL
 fn g 3 3 10 0 0 NULL
 pub NULL 3 3 10 0 NULL NULL
 "#,
-        );
-    }
-    {
-        let src = "static mut COUNT: i32 = 0;
+    );
+    structure(
+        "x.rs",
+        "static mut COUNT: i32 = 0;
 fn f(x: Option<i32>) -> i32 {
     if x.is_some() && x.unwrap() > 0 {
         for i in 0..3 {
@@ -119,11 +117,8 @@ fn f(x: Option<i32>) -> i32 {
     }
     match x { Some(v) => v, None => 0 }
 }
-";
-        structure(
-            "x.rs",
-            src,
-            r#"global_state 1 0 8
+",
+        r#"global_state 1 0 8
 block 2 0 77
 branch 3 0 61
 condition 3 0 13
@@ -141,15 +136,15 @@ throw 8 0 8
 branch 10 0 7
 branch 10 0 3
 "#,
-        );
-    }
+    );
 }
 
 /// C: the same facts, with `static` as the visibility marker and `goto`.
 #[test]
 fn c() {
-    {
-        let src = "#include <stdio.h>
+    check(
+        "x.c",
+        "#include <stdio.h>
 
 /* make a buffer */
 char *buf(int n, int m) {
@@ -157,35 +152,31 @@ char *buf(int n, int m) {
 }
 
 int sum(int a, int b) { return a + b; }
-";
-        check(
-            "x.c",
-            src,
-            r#"file NULL 1 8 33 5 NULL 0
+",
+        r#"file NULL 1 8 33 5 NULL 0
 import <stdio.h> 1 1 2 0 NULL NULL
 fn buf 4 6 15 0 2 NULL
 fn sum 8 8 16 0 2 NULL
 "#,
-        );
-        // Calls; `static` through the private `_s` capture, which itself creates no span.
-        let src = "static int helper(int x) { return x; }
+    );
+    // Calls; `static` through the private `_s` capture, which itself creates no span.
+    check(
+        "x.c",
+        "static int helper(int x) { return x; }
 int api(int y) { return helper(y) + g(y); }
 extern int h(void);
-";
-        check(
-            "x.c",
-            src,
-            r#"file NULL 1 3 38 0 NULL 0
+",
+        r#"file NULL 1 3 38 0 NULL 0
 fn helper 1 1 12 0 1 NULL
 static NULL 1 1 12 0 NULL NULL
 fn api 2 2 19 0 1 NULL
 call helper 2 2 4 0 NULL NULL
 call g 2 2 4 0 NULL NULL
 "#,
-        );
-    }
-    {
-        let src = "int counter = 0;
+    );
+    structure(
+        "x.c",
+        "int counter = 0;
 static int cache[4];
 const int limit = 3;
 extern int shared;
@@ -197,11 +188,8 @@ int f(int a) {
 done:
     return 0;
 }
-";
-        structure(
-            "x.c",
-            src,
-            r#"global_state 1 0 5
+",
+        r#"global_state 1 0 5
 global_state 2 0 7
 block 5 0 72
 branch 6 0 44
@@ -219,37 +207,33 @@ branch 9 0 6
 branch 9 0 9
 branch 9 1 5
 "#,
-        );
-    }
+    );
 }
 
 /// C++: classes and namespaces, with C's markers.
 #[test]
 fn cpp() {
-    {
-        let src = "#include \"x.h\"
+    check(
+        "x.cpp",
+        "#include \"x.h\"
 
 // counter
 int &get(Foo &f) { return f.n; }
 
 int Foo::size(int a) const { return a; }
-";
-        check(
-            "x.cpp",
-            src,
-            r#"file NULL 1 6 33 2 NULL 0
+",
+        r#"file NULL 1 6 33 2 NULL 0
 import "x.h" 1 1 4 0 NULL NULL
 fn get 4 4 15 0 1 NULL
 fn Foo::size 6 6 14 0 1 NULL
 "#,
-        );
-        let src = "static int helper(int x) { return x; }
+    );
+    check(
+        "x.cpp",
+        "static int helper(int x) { return x; }
 int api(S s) { return helper(1) + ns::f(2) + s.m(3); }
-";
-        check(
-            "x.cpp",
-            src,
-            r#"file NULL 1 2 40 0 NULL 0
+",
+        r#"file NULL 1 2 40 0 NULL 0
 fn helper 1 1 12 0 1 NULL
 static NULL 1 1 12 0 NULL NULL
 fn api 2 2 28 0 1 NULL
@@ -257,19 +241,16 @@ call helper 2 2 4 0 NULL NULL
 call f 2 2 6 0 NULL NULL
 call m 2 2 6 0 NULL NULL
 "#,
-        );
-    }
-    {
-        let src = "int f(std::vector<int> v) {
+    );
+    structure(
+        "x.cpp",
+        "int f(std::vector<int> v) {
     for (int x : v) { if (x < 0) throw 1; }
     try { g(); } catch (...) { return 0; }
     return 1;
 }
-";
-        structure(
-            "x.cpp",
-            src,
-            r#"block 1 0 39
+",
+        r#"block 1 0 39
 branch 2 0 18
 block 2 1 11
 branch 2 1 9
@@ -278,46 +259,42 @@ block 3 1 6
 branch 3 0 9
 block 3 1 5
 "#,
-        );
-    }
+    );
 }
 
 /// Python: visibility comes from the name, in SQL.
 #[test]
 fn python() {
-    {
-        let src = "import os, sys
+    check(
+        "x.py",
+        "import os, sys
 from a.b import c
 
 # twice
 def double(x, y=1):
     return x * 2
-";
-        check(
-            "x.py",
-            src,
-            r#"file NULL 1 6 24 2 NULL 0
+",
+        r#"file NULL 1 6 24 2 NULL 0
 import os 1 1 4 0 NULL NULL
 import sys 1 1 4 0 NULL NULL
 import a.b.c 2 2 6 0 NULL NULL
 fn double 5 6 14 0 2 NULL
 "#,
-        );
-        let src = "def _private(x):
+    );
+    check(
+        "x.py",
+        "def _private(x):
     return len(x) + os.path.join(x)
-";
-        check(
-            "x.py",
-            src,
-            r#"file NULL 1 2 20 0 NULL 0
+",
+        r#"file NULL 1 2 20 0 NULL 0
 fn _private 1 2 20 0 1 NULL
 call len 2 2 4 0 NULL NULL
 call join 2 2 8 0 NULL NULL
 "#,
-        );
-    }
-    {
-        let src = "def f(x):
+    );
+    structure(
+        "x.py",
+        "def f(x):
     global COUNT
     if x and x > 1:
         for i in range(x):
@@ -330,11 +307,8 @@ call join 2 2 8 0 NULL NULL
     except KeyError:
         return 0
     return 1 if x else 2
-";
-        structure(
-            "x.py",
-            src,
-            r#"block 2 0 59
+",
+        r#"block 2 0 59
 global_state 2 0 2
 branch 3 0 43
 condition 3 0 5
@@ -353,77 +327,68 @@ branch 11 0 5
 block 12 1 2
 branch 13 0 5
 "#,
-        );
-    }
+    );
 }
 
 /// TypeScript, TSX and JavaScript share one query: functions, calls, imports and
 /// exports, and control-flow structure.
 #[test]
 fn ecma() {
-    {
-        let src = "import { a } from './a';
+    check(
+        "x.ts",
+        "import { a } from './a';
 
 // adds
 function add(x: number, y: number): number { return x + y; }
 const id = (v: string) => v;
 const inc = n => n + 1;
 class K { m(a, b) { return a; } }
-";
-        check(
-            "x.ts",
-            src,
-            r#"file NULL 1 7 64 2 NULL 0
+",
+        r#"file NULL 1 7 64 2 NULL 0
 import ./a 1 1 9 0 NULL NULL
 fn add 4 4 20 0 2 NULL
 fn id 5 5 9 0 1 NULL
 fn inc 6 6 7 0 NULL NULL
 fn m 7 7 11 0 2 NULL
 "#,
-        );
-    }
-    {
-        let src = "import React from 'react';
+    );
+    check(
+        "x.tsx",
+        "import React from 'react';
 /** a view */
 const View = (p: Props) => <div>{p.x}</div>;
-";
-        check(
-            "x.tsx",
-            src,
-            r#"file NULL 1 3 28 4 NULL 0
+",
+        r#"file NULL 1 3 28 4 NULL 0
 import react 1 1 7 0 NULL NULL
 fn View 3 3 19 0 1 NULL
 "#,
-        );
-    }
-    {
-        let src = "import x from \"x\";
+    );
+    check(
+        "x.js",
+        "import x from \"x\";
 // gen
 function* g(a) { yield a; }
 const f = function (a, b) { return a; };
-";
-        check(
-            "x.js",
-            src,
-            r#"file NULL 1 4 33 2 NULL 0
+",
+        r#"file NULL 1 4 33 2 NULL 0
 import x 1 1 7 0 NULL NULL
 fn g 3 3 11 0 1 NULL
 fn f 4 4 13 0 2 NULL
 "#,
-        );
-        // Calls and `export` markers, alike in every ECMAScript dialect.
-        let src = "export function a() { b(); this.c(); }
+    );
+    // Calls and `export` markers, alike in every ECMAScript dialect.
+    let src = "export function a() { b(); this.c(); }
 function b() {}
 export function* g() {}
 export const h = () => b();
 export const k = function () {};
 const internal = () => 1;
 ";
-        for path in ["x.ts", "x.tsx", "x.js"] {
-            check(
-                path,
-                src,
-                r#"file NULL 1 6 60 0 NULL 0
+    for path in ["x.ts", "x.tsx", "x.js"] {
+        check(
+            path,
+            src,
+            r#"file NULL 1 6 60 0 NULL 0
 fn a 1 1 16 0 0 NULL
 pub NULL 1 1 16 0 NULL NULL
 call b 1 1 3 0 NULL NULL
@@ -438,11 +403,9 @@ fn k 5 5 7 0 0 NULL
 pub NULL 5 5 7 0 NULL NULL
 fn internal 6 6 6 0 0 NULL
 "#,
-            );
-        }
+        );
     }
-    {
-        let src = "let count = 0;
+    let src = "let count = 0;
 export let shared = 1;
 const fixed = 2;
 var legacy;
@@ -454,11 +417,11 @@ function f(a) {
     switch (a) { case 1: return 1; }
 }
 ";
-        for path in ["x.ts", "x.tsx", "x.js"] {
-            structure(
-                path,
-                src,
-                r#"global_state 1 0 5
+    for path in ["x.ts", "x.tsx", "x.js"] {
+        structure(
+            path,
+            src,
+            r#"global_state 1 0 5
 global_state 2 0 5
 global_state 4 0 3
 block 5 0 65
@@ -476,8 +439,7 @@ block 9 1 9
 branch 9 1 5
 branch 10 0 6
 "#,
-            );
-        }
+        );
     }
 }
 
@@ -485,18 +447,14 @@ branch 10 0 6
 /// checks their captures); broken input counts its parse errors.
 #[test]
 fn degenerate_input() {
-    {
-        // Also compiles every language's query.
-        for l in LANGS {
-            let s = extract(*l, b"");
-            assert_eq!(render(&s), "file NULL 1 1 0 0 NULL 0\n", "{}", l.name);
-        }
+    // Also compiles every language's query.
+    for l in LANGS {
+        let s = extract(*l, b"");
+        assert_eq!(render(&s), "file NULL 1 1 0 0 NULL 0\n", "{}", l.name);
     }
-    {
-        let s = extract(Lang::of("x.c").unwrap(), b"int f( {{{ ");
-        assert_eq!(s[0].kind, "file");
-        assert!(s[0].errors.unwrap() >= 1);
-    }
+    let s = extract(Lang::of("x.c").unwrap(), b"int f( {{{ ");
+    assert_eq!(s[0].kind, "file");
+    assert!(s[0].errors.unwrap() >= 1);
 }
 
 /// Import statements become one `import` span per target path.

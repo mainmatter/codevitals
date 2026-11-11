@@ -1,4 +1,4 @@
-"""Generate grafana/dashboards/tally.json from the metric views in sql/metrics.sql.
+"""Generate grafana/dashboards/codevitals.json from the metric views in sql/metrics.sql.
 
 Run from the repository root after changing a metric: python3 grafana/generate.py
 The test `dashboard_matches_metrics` fails until the dashboard is regenerated.
@@ -26,16 +26,25 @@ UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none"
          "global_state": "none", "exceptions": "none", "goto": "none",
          "import_distance": "none"}  # others are shares in [0, 1]
 LIFTS = {"co_change_distance", "import_distance"}  # 1 = chance; drawn as a dashed reference line
-# Drawn as one line per language family instead of the combined value, which moves
-# with the language mix.
-FAMILIES = {"dependency_reach", "import_distance", "import_coverage"}
+# Drawn as one line per language family, plus the combined value, which moves with
+# the language mix as well as with the code.
+FAMILIES = {"decisions", "nesting", "global_state", "exceptions",
+            "dependency_reach", "import_distance", "import_coverage"}
 FAMILY_LABELS = {"c": "C/C++", "rust": "Rust", "python": "Python", "ecma": "JS/TS"}
+# A combined value is an aggregate, not another category: it and its confidence band
+# take the theme's neutral text colour, in every panel; next to languages it is
+# labelled ALL and drawn heavier.
+ALL = "All languages"
+# Kept as one combined line in their own row, and repeated as one line per language
+# family (without the combined line) in a "(by language)" row right below it.
+BY_LANGUAGE = {"size", "change_entropy", "encapsulation", "duplication", "concentration"}
 # Categorical series colours for Grafana's dark theme, in fixed order: blue, orange,
 # aqua, yellow (dataviz reference palette, dark steps). Checked against the dark
 # panel surface #181b1f for colour-vision-deficiency separation and contrast.
-PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500"]
+PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500"]  # one per language family
+# Any other series (files, files per commit): violet, a hue no language family uses.
+OTHER = "#9085e9"
 SECOND_AXIS = {"size": ("files", "files"),  # an extra series on the right axis
-               "nesting": ("deep_share", "share nested deeper than 3"),
                "change_entropy": ("files_per_commit", "files per commit")}
 LOG_SCALE = {"change_entropy"}
 BANDS = {"co_change_distance", "rework", "ownership"}  # low/high columns: two standard errors
@@ -44,7 +53,7 @@ ROWS = {"SIZE": "Size", "CHANGES": "How changes spread", "ENTROPY": "Entropy of 
         "NONLOCAL": "Non-local control flow and state", "DEPENDENCIES": "Dependencies through imports"}
 GUIDE = """**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.
 Change and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits. The shaded band is a 95% confidence interval: movement inside it is noise. A dashed line at 1 marks chance: files are as far apart in the directory tree as at random.
-Dependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.
+Rows marked "(by language)" repeat the row above with one line per language. Complexity, non-local and dependency charts draw one line per language and a heavier one for all languages combined, which also moves when the language mix changes. A file's *reach* is the files it depends on through its imports and theirs.
 No metric is validated against defects yet: read trends within this repository, not absolute values."""
 
 
@@ -60,12 +69,16 @@ def target(ref, view, columns):
             "columns": [{"selector": "time", "text": "time", "type": "timestamp"}] + columns}
 
 
-def panel(pid, view, x, y, w):
+def panel(pid, view, x, y, w, by_language=False):
     columns = [{"selector": "value", "text": TITLES[view], "type": "number"}]
     style = {}  # series label -> extra override properties
-    if view in FAMILIES:
+    if by_language:
         columns = [{"selector": f, "text": label, "type": "number"} for f, label in FAMILY_LABELS.items()]
-    if view in BANDS:
+    elif view in FAMILIES:
+        columns = [{"selector": "value", "text": ALL, "type": "number"}]
+        columns += [{"selector": f, "text": label, "type": "number"} for f, label in FAMILY_LABELS.items()]
+        style[ALL] = [{"id": "custom.lineWidth", "value": 3}]
+    if view in BANDS and not by_language:
         # The 95% confidence interval of the window's mean (two standard errors) as a
         # shaded band: the upper bound fills down to the lower one, and neither draws a line.
         low, high = "95% confidence (low)", "95% confidence"
@@ -76,17 +89,19 @@ def panel(pid, view, x, y, w):
         style[high] = [{"id": "custom.lineWidth", "value": 0},
                        {"id": "custom.fillBelowTo", "value": low},
                        {"id": "custom.fillOpacity", "value": 25}]
-    if view in SECOND_AXIS:
+    if view in SECOND_AXIS and not by_language:
         column, label = SECOND_AXIS[view]
         columns.append({"selector": column, "text": label, "type": "number"})
         style[label] = [{"id": "custom.axisPlacement", "value": "right"}, {"id": "unit", "value": "short"}]
-    # Every series in a panel gets its own palette slot, in fixed order; a language
-    # family keeps its slot in every panel.
-    assert len(columns) <= len(PALETTE), (view, len(columns))
+    # A language family keeps its colour in every panel; combined values are neutral.
+    families = list(FAMILY_LABELS)
+    colors = [PALETTE[families.index(c["selector"])] if c["selector"] in families
+              else "text" if c["selector"] in ("value", "low", "high") else OTHER
+              for c in columns]
     overrides = [{"matcher": {"id": "byName", "options": c["text"]},
                   "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}]
                   + style.get(c["text"], [])}
-                 for c, color in zip(columns, PALETTE)]
+                 for c, color in zip(columns, colors)]
     targets = [target("A", view, columns)]
     defaults = {"unit": UNITS.get(view, "percentunit"), "decimals": 2,
                 "custom": {"drawStyle": "line", "lineWidth": 2, "spanNulls": False,
@@ -98,7 +113,8 @@ def panel(pid, view, x, y, w):
                                   "steps": [{"color": "transparent", "value": None},
                                             {"color": "text", "value": 1}]}
         defaults["custom"]["thresholdsStyle"] = {"mode": "dashed"}
-    return {"id": pid, "type": "timeseries", "title": TITLES[view] + arrow(view),
+    title = TITLES[view] + (" (by language)" if by_language else "")
+    return {"id": pid, "type": "timeseries", "title": title + arrow(view),
             "description": DESCRIPTIONS[view], "datasource": DS,
             "gridPos": {"h": 9, "w": w, "x": x, "y": y}, "targets": targets,
             "fieldConfig": {"defaults": defaults, "overrides": overrides},
@@ -113,19 +129,24 @@ pid, y = 2, 4
 groups = {}
 for v in views:
     groups.setdefault(CATEGORIES[v], []).append(v)
+sections = []  # (row title, views, by language)
 for category, vs in groups.items():
-    panels.append({"id": pid, "type": "row", "title": ROWS[category], "collapsed": False,
+    sections.append((ROWS[category], vs, False))
+    if split := [v for v in vs if v in BY_LANGUAGE]:
+        sections.append((ROWS[category] + " (by language)", split, True))
+for title, vs, by_language in sections:
+    panels.append({"id": pid, "type": "row", "title": title, "collapsed": False,
                    "gridPos": {"h": 1, "w": 24, "x": 0, "y": y}, "panels": []})
     pid += 1
     y += 1
     w = 24 // min(len(vs), 3)
     for i, v in enumerate(vs):
-        panels.append(panel(pid, v, (i % 3) * w, y + (i // 3) * 9, w))
+        panels.append(panel(pid, v, (i % 3) * w, y + (i // 3) * 9, w, by_language))
         pid += 1
     y += 9 * ((len(vs) + 2) // 3)
 
 dashboard = {
-    "uid": "tally", "title": "tally", "tags": ["tally"], "editable": True, "schemaVersion": 39,
+    "uid": "codevitals", "title": "codevitals", "tags": ["codevitals"], "editable": True, "schemaVersion": 39,
     "time": {"from": "now-15y", "to": "now"}, "timezone": "utc", "graphTooltip": 1,
     "templating": {"list": [{"name": "datasource", "label": "Data source", "type": "datasource",
                              "query": "yesoreyeram-infinity-datasource"},
@@ -135,7 +156,7 @@ dashboard = {
                                          "value": "http://127.0.0.1:8123/metrics.json"}}]},
     "panels": panels,
 }
-with open("grafana/dashboards/tally.json", "w") as out:
+with open("grafana/dashboards/codevitals.json", "w") as out:
     json.dump(dashboard, out, indent=2, ensure_ascii=False)
     out.write("\n")
-print(f"{len(views)} metric panels in rows {[ROWS[c] for c in groups]}")
+print(f"{len(views)} metrics in rows {[title for title, _, _ in sections]}")

@@ -39,18 +39,18 @@ pub fn walk(
         })
     };
 
-    // New commits, newest first.
-    let mut chain = Vec::new();
     let head = repo
         .rev_parse_single(rev)
         .and_then(|r| Ok(r.object()?.peel_to_commit()?.id))
         .map_err(anyhow::Error::from)
         .with_context(|| {
             format!(
-                "resolve {rev:?} to a commit; pass a branch, tag or commit id \
+                "resolve {rev:?} to a commit; pass a branch, tag or commit id with --rev \
                  (a repository whose HEAD has no commits, such as a jj workspace, needs one)"
             )
         })?;
+    // New commits, newest first.
+    let mut chain = Vec::new();
     let mut next = Some(head);
     while let Some(id) = next.filter(|id| tip.is_none_or(|(_, t)| t != *id)) {
         chain.push(id);
@@ -64,7 +64,8 @@ pub fn walk(
         path.display()
     );
     let started = Instant::now();
-    info!(new = chain.len(), stored = tip.map_or(0, |(seq, _)| seq + 1), %rev, "walk");
+    let stored = tip.map_or(0, |(seq, _)| seq + 1);
+    info!(new = chain.len(), stored, %rev, "walk");
 
     // The .gitattributes files of the stored tip; each commit then applies its own changes.
     let mut attributes = Attributes::default();
@@ -87,8 +88,8 @@ pub fn walk(
     }
 
     let mut changes = 0;
-    let mut seq = tip.map_or(0, |(seq, _)| seq + 1);
-    for (b, batch) in chain.rchunks(BATCH).enumerate() {
+    let mut seq = stored;
+    for batch in chain.rchunks(BATCH) {
         // Appenders join the open transaction, so each commit row and its changes land together.
         let tx = db.transaction()?;
         let mut commits = tx.appender("commits")?;
@@ -96,38 +97,14 @@ pub fn walk(
         for &id in batch.iter().rev() {
             let diffing = Instant::now();
             let commit = find(id)?;
-            let (rows, time, author, message) = (|| -> Result<_> {
-                // The previous commit on the chain is the first parent; the root diffs against the empty tree.
-                let prev = match commit.parent_ids().next() {
-                    Some(p) => find(p.detach())?.tree()?,
-                    None => repo.empty_tree(),
-                };
-                let mut rows = BTreeMap::new();
-                for c in
-                    repo.diff_tree_to_tree(&prev, &commit.tree()?, gix::diff::Options::default())?
-                {
-                    let (old, new) = match c {
-                        Change::Addition { .. } => (None, file(c.entry_mode_and_id())),
-                        Change::Deletion { .. } => (file(c.entry_mode_and_id()), None),
-                        Change::Modification { .. } => (
-                            file(c.source_entry_mode_and_id()),
-                            file(c.entry_mode_and_id()),
-                        ),
-                        Change::Rewrite { .. } => unreachable!("rename tracking is off"),
-                    };
-                    if old != new {
-                        let path = path_text(c.location());
-                        ensure!(
-                            !rows.contains_key(&path),
-                            "two changes for the path {path:?}"
-                        );
-                        rows.insert(path, new);
-                    }
-                }
-                let time = Value::Timestamp(TimeUnit::Second, commit.time()?.seconds);
+            let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
+            let (time, author, message) = (|| -> Result<_> {
                 let author = commit.author()?;
-                let author = format!("{} <{}>", author.name, author.email);
-                Ok((rows, time, author, commit.message_raw()?.to_string()))
+                Ok((
+                    Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
+                    format!("{} <{}>", author.name, author.email),
+                    commit.message_raw()?.to_string(),
+                ))
             })()
             .with_context(|| format!("read commit {id}"))?;
             commits.append_row(params![seq, id.to_string(), time, author, message])?;
@@ -151,29 +128,53 @@ pub fn walk(
         changed.flush()?;
         drop((commits, changed));
         tx.commit()?;
-        info!(
-            "walk: {}/{} commits",
-            (b * BATCH + batch.len()),
-            chain.len()
-        );
+        info!("walk: {}/{} commits", seq - stored, chain.len());
     }
     info!(commits = chain.len(), changes, elapsed = ?started.elapsed(), "walk done");
     Ok((chain.len(), changes))
 }
 
+/// A commit's changes against its first parent (the root's against the empty tree):
+/// each changed path with its new blob, `None` when the file is gone.
+fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String, Option<String>>> {
+    // The chain walk already found every parent, so a shallow boundary cannot hide one here.
+    let prev = match commit.parent_ids().next() {
+        Some(p) => repo.find_commit(p)?.tree()?,
+        None => repo.empty_tree(),
+    };
+    let mut rows = BTreeMap::new();
+    for c in repo.diff_tree_to_tree(&prev, &commit.tree()?, gix::diff::Options::default())? {
+        let (old, new) = match c {
+            Change::Addition { .. } => (None, file(c.entry_mode_and_id())),
+            Change::Deletion { .. } => (file(c.entry_mode_and_id()), None),
+            Change::Modification { .. } => (
+                file(c.source_entry_mode_and_id()),
+                file(c.entry_mode_and_id()),
+            ),
+            Change::Rewrite { .. } => unreachable!("rename tracking is off"),
+        };
+        if old != new {
+            let path = path_text(c.location());
+            ensure!(
+                !rows.contains_key(&path),
+                "two changes for the path {path:?}"
+            );
+            rows.insert(path, new);
+        }
+    }
+    Ok(rows)
+}
+
 /// A path as text: as is when it is UTF-8, else with each byte of an invalid
 /// sequence written `\xNN`, so distinct paths stay distinct.
 fn path_text(path: &[u8]) -> String {
-    match std::str::from_utf8(path) {
-        Ok(text) => text.to_owned(),
-        Err(_) => path.utf8_chunks().fold(String::new(), |mut text, chunk| {
-            text.push_str(chunk.valid());
-            for b in chunk.invalid() {
-                write!(text, "\\x{b:02x}").expect("writing to a String succeeds");
-            }
-            text
-        }),
-    }
+    path.utf8_chunks().fold(String::new(), |mut text, chunk| {
+        text.push_str(chunk.valid());
+        for b in chunk.invalid() {
+            write!(text, "\\x{b:02x}").expect("writing to a String succeeds");
+        }
+        text
+    })
 }
 
 /// `B(tree, path)`: the blob id when the entry is a regular or executable file.

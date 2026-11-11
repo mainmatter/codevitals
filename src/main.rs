@@ -1,6 +1,7 @@
-//! The `tally` command line: `scan` records a repository's history and parses its
+//! The `codevitals` command line: `scan` records a repository's history and parses its
 //! blobs; `metrics` exports the metric views as JSON.
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -9,7 +10,9 @@ use clap::{CommandFactory, Parser};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::db::{Access, open};
+use duckdb::AccessMode;
+
+use crate::db::open;
 
 mod attributes;
 mod db;
@@ -23,20 +26,22 @@ mod walk;
 /// Logs go to stderr; set `RUST_LOG` to `debug` for one line per commit and blob,
 /// or to `off` for silence. The default is `info`: phases and progress.
 #[derive(Parser)]
+#[command(name = "cv")]
 enum Cli {
-    /// Record REV's first-parent history, then parse every new blob.
+    /// Record a repository's first-parent history, then parse every new blob.
     Scan {
-        #[arg(long, default_value = ".")]
+        #[arg(default_value = ".")]
         repo: PathBuf,
-        #[arg(long, default_value = "tally.duckdb")]
+        #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
-        #[arg(default_value = "HEAD")]
+        /// Commit whose history to record.
+        #[arg(long, default_value = "HEAD")]
         rev: String,
     },
     /// Compute metrics into one JSON object: each metric's name maps to an array
     /// of row objects.
     Metrics {
-        #[arg(long, default_value = "tally.duckdb")]
+        #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
         /// File to write, replaced atomically; `-` writes to stdout.
         output: PathBuf,
@@ -53,7 +58,7 @@ fn main() -> Result<()> {
         .with_ansi(std::io::stderr().is_terminal())
         .with_timer(tracing_subscriber::fmt::time::uptime())
         .init();
-    // Listing the metrics means binding tally's SQL, so the command that lists them
+    // Listing the metrics means binding codevitals' SQL, so the command that lists them
     // (in `--help` and as the valid values of METRIC) is built only to report help
     // or an error.
     let cli = Cli::try_parse().unwrap_or_else(|_| usage());
@@ -65,7 +70,7 @@ fn main() -> Result<()> {
         } => {
             let repo = gix::discover(&repo)
                 .with_context(|| format!("open the git repository containing {repo:?}"))?;
-            let mut db = open(&path, Access::ReadWrite)?;
+            let mut db = open(&path, AccessMode::ReadWrite)?;
             let (commits, changes) = walk::walk(&mut db, &path, &repo, &rev)?;
             let blobs = parse::parse(&mut db, &repo)?;
             graph::derive(&mut db, graph::Cones::Stored)?;
@@ -78,31 +83,35 @@ fn main() -> Result<()> {
         } => {
             ensure!(
                 path.exists(),
-                "no database at {path:?}; create it with `tally scan --db {}`",
+                "no database at {path:?}; create it with `cv scan --db {}`",
                 path.display()
             );
-            let mut db = open(&path, Access::ReadOnly)?;
+            let mut db = open(&path, AccessMode::ReadOnly)?;
             let commits: i64 = db.query_row("select count(*) from commits", [], |r| r.get(0))?;
             ensure!(
                 commits > 0,
-                "{path:?} has no commits yet; run `tally scan --db {}` first",
+                "{path:?} has no commits yet; run `cv scan --db {}` first",
                 path.display()
             );
+            let metrics = metrics::list(&db)?;
             ensure!(
-                !metrics::exists(&db, &output.to_string_lossy())?,
-                "{output:?} is a metric; give the output file first, e.g. `tally metrics - {}`",
+                !metrics.iter().any(|m| output.as_os_str() == m.as_str()),
+                "{output:?} is a metric; give the output file first, e.g. `cv metrics - {}`",
                 output.display()
             );
-            for name in &names {
-                if !metrics::exists(&db, name)? {
-                    usage();
-                }
+            if names.iter().any(|n| !metrics.contains(n)) {
+                usage();
             }
-            let mut seen = std::collections::HashSet::new();
-            let names: Vec<String> = names
-                .into_iter()
-                .filter(|n| seen.insert(n.clone()))
-                .collect();
+            let names = match names.is_empty() {
+                true => metrics,
+                false => {
+                    let mut seen = HashSet::new();
+                    names
+                        .into_iter()
+                        .filter(|n| seen.insert(n.clone()))
+                        .collect()
+                }
+            };
             let json = metrics::export(&mut db, &names)?;
             if output.as_os_str() == "-" {
                 println!("{json}");

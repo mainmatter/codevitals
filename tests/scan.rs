@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{db, fixture, rev, rows, scan, tally};
+use common::{assert_rows, db, fails, fixture, rev, rows, scan};
 use tempfile::TempDir;
 
 fn dump(dir: &TempDir) -> String {
@@ -50,42 +50,34 @@ fn fixture_tables() {
         blob("main~2:a.rs"),
     );
     let (plus, d) = (blob("main~2:src/b.rs"), blob("main:d.rs"));
-    assert_eq!(
-        rows(
-            dir,
-            "select seq, path, blob from changes order by seq, path"
-        ),
+    assert_rows(
+        dir,
+        "select seq, path, blob from changes order by seq, path",
         format!(
             "(0,README.md,{readme}) (0,a.rs,{a1}) (1,a.rs,{a2}) (1,src/b.rs,{plus}) \
              (2,README.md,NULL) (2,src/b.rs,NULL) (2,src/c.rs,{plus}) (3,d.rs,{d})"
-        )
-    );
-    assert_eq!(
-        rows(
-            dir,
-            "select path, blob, since, until from files order by path, since"
         ),
+    );
+    assert_rows(
+        dir,
+        "select path, blob, since, until from files order by path, since",
         format!(
             "(README.md,{readme},0,2) (a.rs,{a1},0,1) (a.rs,{a2},1,2147483647) \
              (d.rs,{d},3,2147483647) (src/b.rs,{plus},1,2) (src/c.rs,{plus},2,2147483647)"
-        )
-    );
-    assert_eq!(
-        rows(
-            dir,
-            "select kind, count(*), count(distinct blob) from spans group by kind order by kind"
         ),
-        "(block,4,4) (file,4,4) (fn,4,4)"
     );
-    assert_eq!(
-        rows(
-            dir,
-            &format!(
-                "select blob, name, tokens, comments from spans
+    assert_rows(
+        dir,
+        "select kind, count(*), count(distinct blob) from spans group by kind order by kind",
+        "(block,4,4) (file,4,4) (fn,4,4)",
+    );
+    assert_rows(
+        dir,
+        &format!(
+            "select blob, name, tokens, comments from spans
                  where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
-            )
         ),
-        format!("({a1},add,18,0) ({a2},add,18,2)")
+        format!("({a1},add,18,0) ({a2},add,18,2)"),
     );
 }
 
@@ -93,72 +85,57 @@ fn fixture_tables() {
 /// extractor version reparses every blob to the same spans.
 #[test]
 fn rescans() {
-    {
-        let r = fixture();
-        scan(&r.dir, "main");
-        let before = dump(&r.dir);
-        assert_eq!(
-            scan(&r.dir, "main"),
-            "scanned 0 commits, 0 changes; parsed 0 blobs\n"
-        );
-        assert_eq!(dump(&r.dir), before);
-    }
-    {
-        let r = fixture();
-        assert_eq!(
-            scan(&r.dir, "main~2"),
-            "scanned 2 commits, 4 changes; parsed 3 blobs\n"
-        );
-        assert_eq!(
-            scan(&r.dir, "main"),
-            "scanned 2 commits, 4 changes; parsed 1 blobs\n"
-        );
-        assert_eq!(dump(&r.dir), fresh_dump());
-    }
-    {
-        let r = fixture();
-        scan(&r.dir, "main");
-        let before = dump(&r.dir);
-        common::execute(&r.dir, "update spans set v = 0");
-        assert_eq!(
-            scan(&r.dir, "main"),
-            "scanned 0 commits, 0 changes; parsed 4 blobs\n"
-        );
-        assert_eq!(dump(&r.dir), before);
-    }
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
+    assert_eq!(
+        scan(&r.dir, "main"),
+        "scanned 0 commits, 0 changes; parsed 0 blobs\n"
+    );
+    assert_eq!(dump(&r.dir), before);
+    let r = fixture();
+    assert_eq!(
+        scan(&r.dir, "main~2"),
+        "scanned 2 commits, 4 changes; parsed 3 blobs\n"
+    );
+    assert_eq!(
+        scan(&r.dir, "main"),
+        "scanned 2 commits, 4 changes; parsed 1 blobs\n"
+    );
+    assert_eq!(dump(&r.dir), fresh_dump());
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
+    common::execute(&r.dir, "update spans set v = 0");
+    assert_eq!(
+        scan(&r.dir, "main"),
+        "scanned 0 commits, 0 changes; parsed 4 blobs\n"
+    );
+    assert_eq!(dump(&r.dir), before);
 }
 
 /// A rewritten history or a shallow clone fails, saying how to recover, and leaves
 /// the database as it was.
 #[test]
 fn history_errors_say_what_to_do() {
-    {
-        let r = fixture();
-        scan(&r.dir, "main");
-        let before = dump(&r.dir);
-        let out = tally(&r.dir, &["scan", "side"]);
-        assert!(!out.status.success());
-        let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            stderr.contains("\"side\" does not extend the history stored in")
-                && stderr.contains("\"delete from commits; delete from changes\""),
-            "{stderr}"
-        );
-        assert_eq!(dump(&r.dir), before);
-    }
-    {
-        let mut r = fixture();
-        let main = rev(&r.dir, "main");
-        r.make_shallow(gix::ObjectId::from_hex(main.as_bytes()).unwrap());
-        let out = tally(&r.dir, &["scan", "main"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success()
-                && err.contains("shallow clone")
-                && err.contains("fetch-depth: 0"),
-            "{err}"
-        );
-    }
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
+    let err = fails(&r.dir, &["scan", "--rev", "side"]);
+    assert!(
+        err.contains("\"side\" does not extend the history stored in")
+            && err.contains("\"delete from commits; delete from changes\""),
+        "{err}"
+    );
+    assert_eq!(dump(&r.dir), before);
+    let mut r = fixture();
+    let main = rev(&r.dir, "main");
+    r.make_shallow(main.parse().unwrap());
+    let err = fails(&r.dir, &["scan", "--rev", "main"]);
+    assert!(
+        err.contains("shallow clone") && err.contains("fetch-depth: 0"),
+        "{err}"
+    );
 }
 
 /// Content that is not source code gets a `file` row with NULL counts: blobs over
@@ -166,81 +143,62 @@ fn history_errors_say_what_to_do() {
 /// the language of its first path with a known extension.
 #[test]
 fn only_source_code_is_parsed() {
-    {
-        let mut r = fixture();
-        r.write("big.rs", "// x\n".repeat(300_000));
-        r.extend("big\n", 5);
-        scan(&r.dir, "main");
-        assert_eq!(
-            rows(
-                &r.dir,
-                &format!(
-                    "select * exclude (blob, v) from spans where blob = '{}'",
-                    rev(&r.dir, "main:big.rs")
-                )
-            ),
-            "(rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)"
-        );
-    }
-    {
-        let mut r = fixture();
-        r.write("bin.rs", b"fn\0\x01\x02")
-            .write(
-                "lfs.rs",
-                "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n",
-            )
-            .write("app.min.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
-            .write(".empty.txt", "")
-            .write("pkg/__init__.py", "");
-        r.extend("content\n", 5);
-        scan(&r.dir, "main");
-        assert_eq!(
-        rows(
-            &r.dir,
-            "select c.path, s.lang, s.tokens from changes c join spans s on s.blob = c.blob and s.kind = 'file'
-             where c.seq = 4 order by c.path"
+    let mut r = fixture();
+    r.write("big.rs", "// x\n".repeat(300_000));
+    r.extend("big\n", 5);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        &format!(
+            "select * exclude (blob, v) from spans where blob = '{}'",
+            rev(&r.dir, "main:big.rs")
         ),
-        "(.empty.txt,python,0) (app.min.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)"
+        "(rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)",
     );
-    }
+    let mut r = fixture();
+    r.write("bin.rs", b"fn\0\x01\x02")
+        .write(
+            "lfs.rs",
+            "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n",
+        )
+        .write("app.min.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+        .write(".empty.txt", "")
+        .write("pkg/__init__.py", "");
+    r.extend("content\n", 5);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+            "select c.path, s.lang, s.tokens from changes c join spans s on s.blob = c.blob and s.kind = 'file'
+             where c.seq = 4 order by c.path",
+        "(.empty.txt,python,0) (app.min.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)",
+    );
 }
 
-/// A database from an older layout, or parsed by a newer tally, is refused.
+/// A database from an older layout, or parsed by a newer codevitals, is refused.
 #[test]
 fn other_versions_are_refused() {
-    {
-        let r = fixture();
-        common::execute(&r.dir, "create table spans (blob text)");
-        let out = tally(&r.dir, &["scan", "main"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("delete it and scan again"),
-            "{err}"
-        );
-        assert!(db(&r.dir).exists());
-    }
-    {
-        let r = fixture();
-        scan(&r.dir, "main");
-        common::execute(&r.dir, "update tally set extractor = extractor + 1");
-        let out = tally(&r.dir, &["scan", "main"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("parsed by a newer tally"),
-            "{err}"
-        );
-    }
+    let r = fixture();
+    scan(&r.dir, "main");
+    common::execute(&r.dir, "update codevitals set schema = schema - 1");
+    let err = fails(&r.dir, &["scan", "--rev", "main"]);
+    assert!(err.contains("delete it and scan again"), "{err}");
+    assert!(db(&r.dir).exists());
+    let r = fixture();
+    scan(&r.dir, "main");
+    common::execute(&r.dir, "update codevitals set extractor = extractor + 1");
+    let err = fails(&r.dir, &["scan", "--rev", "main"]);
+    assert!(err.contains("parsed by a newer codevitals"), "{err}");
 }
 
 /// A path's role: what .gitattributes declare wins (Linguist's attributes and
-/// `tally=<role>`, with an attribute turned off meaning first-party code), then path
+/// `codevitals=<role>`, with an attribute turned off meaning first-party code), then path
 /// conventions whatever their case, generation markers and minified JavaScript.
 #[test]
 fn roles_follow_attributes_then_conventions() {
     let mut r = fixture();
     r.write(
         ".gitattributes",
-        "integration/** tally=test\nthird/** linguist-vendored\nsrc/gen.rs linguist-generated\n",
+        "integration/** codevitals=test\nthird/** linguist-vendored\nsrc/gen.rs linguist-generated\n",
     )
     .write("third/ours/.gitattributes", "** -linguist-vendored\n");
     let code = "fn f() {}\n";
@@ -446,22 +404,18 @@ fn imports_resolve_by_language_convention() {
     );
     // Imports of an item of another crate name more than a module file has: they
     // fall back to the crate root.
-    assert_eq!(
-        rows(
-            &r.dir,
-            "select name from import_status where fallback and since <= 4 and 4 < until order by name"
-        ),
-        "(app::run) (buck_only::b) (nice_name::n) (root_app::thing)"
+    assert_rows(
+        &r.dir,
+        "select name from import_status where fallback and since <= 4 and 4 < until order by name",
+        "(app::run) (buck_only::b) (nice_name::n) (root_app::thing)",
     );
-    assert_eq!(
-        rows(
-            &r.dir,
-            "select source, target from import_edges where since <= 5 and 5 < until
-             and source in ('src/x.c', 'web/a.ts') order by all"
-        ),
+    assert_rows(
+        &r.dir,
+        "select source, target from import_edges where since <= 5 and 5 < until
+             and source in ('src/x.c', 'web/a.ts') order by all",
         "(src/x.c,src/missing.h) (src/x.c,src/util/u.h) (src/x.c,src/x.h) \
          (web/a.ts,packages/ui/src/button.ts) (web/a.ts,packages/ui/src/index.ts) (web/a.ts,web/b.ts) \
-         (web/a.ts,web/c.ts) (web/a.ts,web/d/index.ts) (web/a.ts,web/src/utils/cn.ts)"
+         (web/a.ts,web/c.ts) (web/a.ts,web/d/index.ts) (web/a.ts,web/src/utils/cn.ts)",
     );
 }
 
@@ -474,11 +428,9 @@ fn non_utf8_paths_stay_distinct() {
         .write(b"a\xfe.rs", "fn y() {}\n");
     r.extend("bytes\n", 5);
     scan(&r.dir, "main");
-    assert_eq!(
-        rows(
-            &r.dir,
-            "select path from changes where seq = 4 order by path"
-        ),
-        "(a\\xfe.rs) (a\\xff.rs)"
+    assert_rows(
+        &r.dir,
+        "select path from changes where seq = 4 order by path",
+        "(a\\xfe.rs) (a\\xff.rs)",
     );
 }

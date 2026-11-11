@@ -1,5 +1,5 @@
 -- One row: the layout and extractor versions of the data (db.rs).
-create table if not exists tally (schema integer, extractor integer);
+create table if not exists codevitals (schema integer, extractor integer);
 -- The metric views (metrics.sql).
 create schema if not exists metrics;
 

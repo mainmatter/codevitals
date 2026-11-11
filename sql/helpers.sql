@@ -40,6 +40,17 @@ create or replace macro family(path) as
        when regexp_matches(lower(path), '\.py$') then 'python'
        when regexp_matches(lower(path), '\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$') then 'ecma' end;
 
+-- A parsed language's family (`lang` of `spans`, `name` of LANGS), as `family` gives it.
+create or replace macro lang_family(lang) as
+  case when lang in ('c', 'cpp') then 'c'
+       when lang in ('rust', 'python') then lang
+       when lang in ('typescript', 'tsx', 'javascript') then 'ecma' end;
+
+-- The ratio sum(num) / sum(den) over one family's rows of a per-language aggregate,
+-- such as `code_totals` grouped by seq: a metric's column for that family.
+create or replace macro family_ratio(num, den, lang, fam) as
+  sum(num) filter (lang_family(lang) = fam) / nullif(sum(den) filter (lang_family(lang) = fam), 0);
+
 -- Each path's role, from its newest version: what .gitattributes declare (`code`:
 -- first-party whatever the conventions), else conventions, case aside.
 create or replace view path_roles as
@@ -71,7 +82,7 @@ conventions as (
   from p)
 select path, if(attr is not null and attr <> 'code', attr, role) as role from conventions;
 
-comment on view path_roles is 'Each path''s role: code (production), test, vendored, generated, documentation or other. What the repository''s .gitattributes declare wins (linguist-vendored, linguist-generated, linguist-documentation, tally=<role>); otherwise path conventions, generation markers and minified JavaScript decide. Tests inside source files (Rust #[cfg(test)] modules) count as code.';
+comment on view path_roles is 'Each path''s role: code (production), test, vendored, generated, documentation or other. What the repository''s .gitattributes declare wins (linguist-vendored, linguist-generated, linguist-documentation, codevitals=<role>); otherwise path conventions, generation markers and minified JavaScript decide. Tests inside source files (Rust #[cfg(test)] modules) count as code.';
 
 -- File versions as [since, until). Per-commit totals add a version's facts at since,
 -- remove them at until and sum: cost grows with changes, not commits times code.

@@ -5,7 +5,10 @@ mod common;
 
 use std::path::Path;
 
-use common::{execute, facts, fixture, fixture_named, random_history, rev, rows, scan, tally};
+use common::{
+    assert_rows, execute, facts, fails, fixture, fixture_named, random_history, rev, rows, scan,
+    succeeds,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -39,8 +42,8 @@ fn metric_views() {
         // Window c0..c2: a.rs 1 + 1/2, src/b.rs 1/2 + 1/2, src/c.rs 1/2, so 1 / sum p^2 = 2.5714.
         // Window c1..c3: a.rs 1/2, src/b.rs 1, src/c.rs 1/2, d.rs 1, so 3.6.
         (
-            "select seq, round(value, 4), round(files_per_commit, 4) from metrics.change_entropy",
-            "(2,2.5714,1.6667) (3,3.6,1.6667)",
+            "select seq, round(value, 4), round(files_per_commit, 4), round(rust, 4) from metrics.change_entropy",
+            "(2,2.5714,1.6667,2.5714) (3,3.6,1.6667,3.6)",
         ),
         // No function is pub, so all function tokens are non-public.
         (
@@ -60,9 +63,10 @@ fn metric_views() {
             "(2,1.0,2) (3,1.0,1)",
         ),
         // No branches, conditions, globals, throws or goto; each function is its body block.
+        // Per language: the fixture is all Rust, so `rust` is the value and `c` is NULL.
         (
-            "select seq, value, deep_share from metrics.nesting",
-            "(0,0.0,0.0) (1,0.0,0.0) (2,0.0,0.0) (3,0.0,0.0)",
+            "select seq, value, deep_share, rust, c from metrics.nesting",
+            "(0,0.0,0.0,0.0,NULL) (1,0.0,0.0,0.0,NULL) (2,0.0,0.0,0.0,NULL) (3,0.0,0.0,0.0,NULL)",
         ),
         (
             "select seq, value from metrics.decisions",
@@ -115,138 +119,96 @@ fn metric_views() {
 /// ignores views a user added.
 #[test]
 fn export() {
-    {
-        let r = fixture();
-        let dir = &r.dir;
-        scan(dir, "main");
-        let out = tally(dir, &["metrics", "-", "co_change_distance", "size"]);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let size = [("01", 18, 1), ("02", 36, 2), ("03", 36, 2), ("05", 45, 3)]
+    let r = fixture();
+    let dir = &r.dir;
+    scan(dir, "main");
+    let out = succeeds(dir, &["metrics", "-", "co_change_distance", "size"]);
+    let size = [("01", 18, 1), ("02", 36, 2), ("03", 36, 2), ("05", 45, 3)]
         .iter()
         .enumerate()
         .map(|(i, (day, tokens, files))| {
             format!(
-                r#"{{"seq":{i},"time":"2026-01-{day}T00:00:00Z","value":{tokens},"files":{files}}}"#
+                r#"{{"seq":{i},"time":"2026-01-{day}T00:00:00Z","value":{tokens},"files":{files},"c":null,"rust":{tokens},"python":null,"ecma":null}}"#
             )
         })
         .collect::<Vec<_>>()
         .join(",");
-        assert_eq!(
-            String::from_utf8(out.stdout).unwrap(),
-            format!(r#"{{"co_change_distance":[],"size":[{size}]}}"#) + "\n"
-        );
+    assert_eq!(
+        out,
+        format!(r#"{{"co_change_distance":[],"size":[{size}]}}"#) + "\n"
+    );
 
-        // All metrics by default, in definition order; empty ones as [].
-        let all = String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap();
-        assert!(
-            all.starts_with(r#"{"size":["#)
-                && all.contains(r#""duplication":[]"#)
-                && all.contains(r#""by_language":{"rust":1.0}"#),
-            "{all}"
-        );
+    // All metrics by default, in definition order; empty ones as [].
+    let all = succeeds(dir, &["metrics", "-"]);
+    assert!(
+        all.starts_with(r#"{"size":["#)
+            && all.contains(r#""duplication":[]"#)
+            && all.contains(r#""by_language":{"rust":1.0}"#),
+        "{all}"
+    );
 
-        // A file output holds the same document; the partial file is renamed away.
-        let path = dir.path().join("metrics.json");
-        let out = tally(dir, &["metrics", path.to_str().unwrap()]);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), all);
-        assert!(!dir.path().join("metrics.partial").exists());
+    // A file output holds the same document; the partial file is renamed away.
+    let path = dir.path().join("metrics.json");
+    succeeds(dir, &["metrics", path.to_str().unwrap()]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), all);
+    assert!(!dir.path().join("metrics.partial").exists());
 
-        // A metric removed from tally's SQL disappears from a database an older tally,
-        // with other SQL, opened.
-        execute(
-            dir,
-            "create view metrics.removed as select 0 as seq, 1 as value;
-         create or replace macro tally_sql() as 'older'",
-        );
-        assert_eq!(
-            String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap(),
-            all
-        );
+    // A metric removed from codevitals' SQL disappears from a database an older codevitals,
+    // with other SQL, opened.
+    execute(
+        dir,
+        "create view metrics.removed as select 0 as seq, 1 as value;
+         create or replace macro codevitals_sql() as 'older'",
+    );
+    assert_eq!(succeeds(dir, &["metrics", "-"]), all);
 
-        // Forgetting the output argument does not silently write a file named after a metric.
-        let out = tally(dir, &["metrics", "size"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("is a metric"),
-            "{err}"
-        );
-        assert!(!dir.path().join("size").exists());
+    // Forgetting the output argument does not silently write a file named after a metric.
+    let err = fails(dir, &["metrics", "size"]);
+    assert!(err.contains("is a metric"), "{err}");
+    assert!(!dir.path().join("size").exists());
 
-        let out = tally(dir, &["metrics", "-", "nope"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("invalid value 'nope'"),
-            "{err}"
-        );
-    }
-    {
-        let r = fixture();
-        let out = tally(&r.dir, &["metrics", "-"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("no database at"),
-            "{err}"
-        );
-        assert!(!common::db(&r.dir).exists());
+    let err = fails(dir, &["metrics", "-", "nope"]);
+    assert!(err.contains("invalid value 'nope'"), "{err}");
+    let r = fixture();
+    let err = fails(&r.dir, &["metrics", "-"]);
+    assert!(err.contains("no database at"), "{err}");
+    assert!(!common::db(&r.dir).exists());
 
-        execute(&r.dir, include_str!("../sql/schema.sql"));
-        let out = tally(&r.dir, &["metrics", "-"]);
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            !out.status.success() && err.contains("has no commits yet"),
-            "{err}"
-        );
+    execute(&r.dir, include_str!("../sql/schema.sql"));
+    let err = fails(&r.dir, &["metrics", "-"]);
+    assert!(err.contains("has no commits yet"), "{err}");
 
-        scan(&r.dir, "main");
-        execute(
-            &r.dir,
-            "create view metrics.mine as select 0 as seq, 1 as value; create view \"my view\" as select 1",
-        );
-        let db = common::db(&r.dir);
-        let mut perms = std::fs::metadata(&db).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&db, perms).unwrap();
-        let out = tally(&r.dir, &["metrics", "-", "size", "size"]);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(
-            String::from_utf8(out.stdout)
-                .unwrap()
-                .matches("\"size\"")
-                .count(),
-            1
-        );
-    }
+    scan(&r.dir, "main");
+    execute(
+        &r.dir,
+        "create view metrics.mine as select 0 as seq, 1 as value; create view \"my view\" as select 1",
+    );
+    let db = common::db(&r.dir);
+    let mut perms = std::fs::metadata(&db).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&db, perms).unwrap();
+    let out = succeeds(&r.dir, &["metrics", "-", "size", "size"]);
+    assert_eq!(out.matches("\"size\"").count(), 1);
 }
 
 #[test]
 fn dashboard_matches_metrics() {
     let dir = facts("");
-    let dashboard = Path::new(env!("CARGO_MANIFEST_DIR")).join("grafana/dashboards/tally.json");
+    let dashboard =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("grafana/dashboards/codevitals.json");
     let panels = format!(
         "select unnest(json_extract(json, '$.panels[*]')) as p from read_json_objects('{}')",
         dashboard.display()
     );
-    // Each metric view has one single-target panel, described by the view's comment
-    // after its `CATEGORY: Title` line.
+    // Each metric view has one single-target panel (besides its by-language copy),
+    // described by the view's comment after its `CATEGORY: Title` line.
     let mismatched = rows(
         &dir,
         &format!(
             "with p as ({panels}),
              single as (select p ->> '$.targets[0].root_selector' as selector, p ->> '$.description' as description
-                        from p where json_array_length(p -> '$.targets') = 1)
+                        from p where json_array_length(p -> '$.targets') = 1
+                          and not contains(p ->> '$.title', '(by language)'))
              select v.view_name from duckdb_views() v
              where v.schema_name = 'metrics'
                and (select count(*) from single s
@@ -281,29 +243,23 @@ fn mean_value(dir: &TempDir, metric: &str) -> f64 {
 /// and when a few hubs take all the imports.
 #[test]
 fn lifts_are_one_under_the_null() {
-    {
-        for (modules, files) in [(5, 40), (50, 200), (200, 800)] {
-            let dir = facts(&random_history(0, 3000, modules, files, 3));
-            let lift = mean_value(&dir, "metrics.co_change_distance");
-            assert!((lift - 1.0).abs() < 0.02, "{modules} modules: lift {lift}");
-        }
+    for (modules, files) in [(5, 40), (50, 200), (200, 800)] {
+        let dir = facts(&random_history(0, 3000, modules, files, 3));
+        let lift = mean_value(&dir, "metrics.co_change_distance");
+        assert!((lift - 1.0).abs() < 0.02, "{modules} modules: lift {lift}");
     }
-    {
-        for (modules, targets) in [(5, 600), (50, 600), (50, 5)] {
-            let dir = facts(&random_imports(modules, 600, targets, 4));
-            assert_eq!(
-                rows(
-                    &dir,
-                    "select class, count(*) from import_status group by all"
-                ),
-                "(resolved,2400)"
-            );
-            let lift = mean_value(&dir, "metrics.import_distance");
-            assert!(
-                (lift - 1.0).abs() < 0.03,
-                "{modules} modules, {targets} targets: lift {lift}"
-            );
-        }
+    for (modules, targets) in [(5, 600), (50, 600), (50, 5)] {
+        let dir = facts(&random_imports(modules, 600, targets, 4));
+        assert_rows(
+            &dir,
+            "select class, count(*) from import_status group by all",
+            "(resolved,2400)",
+        );
+        let lift = mean_value(&dir, "metrics.import_distance");
+        assert!(
+            (lift - 1.0).abs() < 0.03,
+            "{modules} modules, {targets} targets: lift {lift}"
+        );
     }
 }
 
@@ -336,7 +292,7 @@ fn inert_commits_leave_past_windows_unchanged() {
          insert into changes (seq, path, blob) select 300, 'bulk/b' || i || '.rs', 'bulk' || i from range(40) r(i);
          insert into changes (seq, path, blob) values (301, 'lone/x.rs', 'lone');
          insert into spans (blob, v, lang, kind, line, tokens)
-           select blob, 3, 'rust', 'file', 1, 1 from changes where seq >= 300;",
+           select blob, 1, 'rust', 'file', 1, 1 from changes where seq >= 300;",
     );
     let after = windows(&dir);
     for (b, a) in before.iter().zip(&after) {
@@ -457,12 +413,10 @@ fn change_points_match_per_commit_sums() {
            group by all)
          select seq, coalesce(sum(t) filter (n > 1), 0) / sum(t) from g group by seq order by seq";
     let duplication = rows(&r.dir, naive_duplication);
-    assert_eq!(
-        rows(
-            &r.dir,
-            "select seq, value from metrics.duplication order by seq"
-        ),
-        duplication
+    assert_rows(
+        &r.dir,
+        "select seq, value from metrics.duplication order by seq",
+        &duplication,
     );
     assert!(
         duplication.contains("(4,1.0)") && duplication.contains("(6,0.0)"),
@@ -483,9 +437,9 @@ fn random_imports(modules: u32, files: u32, targets: u32, per_file: u32) -> Stri
     format!(
         "insert into commits values (0, 'c0', timestamp '2026-01-01', 't <t@t>', 'init');
          insert into changes (seq, path, blob) select 0, 'm' || (f % {modules}) || '/f' || f || '.py', 'b' || f from range({files}) g(f);
-         insert into spans (blob, v, lang, kind, line, tokens) select 'b' || f, 6, 'python', 'file', 1, 1 from range({files}) g(f);
+         insert into spans (blob, v, lang, kind, line, tokens) select 'b' || f, 1, 'python', 'file', 1, 1 from range({files}) g(f);
          insert into spans (blob, v, lang, kind, name, line, start_byte, end_byte)
-           select 'b' || f, 6, 'python', 'import', 'f' || t, 1, t, t + 1
+           select 'b' || f, 1, 'python', 'import', 'f' || t, 1, t, t + 1
            from range({files}) a(f), range({targets}) b(t) where f <> t
            qualify row_number() over (partition by f order by md5(f || ':' || t)) <= {per_file};"
     )
@@ -512,7 +466,7 @@ fn dependency_metrics_by_hand() {
     r.extend("x and w\n", 3);
     scan(&r.dir, "main");
     // `metrics` rebuilds the cones that dependency_reach reads.
-    assert!(tally(&r.dir, &["metrics", "-"]).status.success());
+    succeeds(&r.dir, &["metrics", "-"]);
     // One window: the week's last commit, over the last three code commits.
     execute(&r.dir, "create or replace macro window_commits() as 3");
     let cases = [
@@ -538,83 +492,102 @@ fn dependency_metrics_by_hand() {
     }
 }
 
-/// The SQL matches the languages: `family()` agrees with `LANGS`, every family has
-/// every per-family rule, and every span kind the SQL reads is one a query captures.
+/// The SQL matches the languages: `family()` and `lang_family()` agree with `LANGS`,
+/// every family has every per-family rule, every per-family metric has a column for
+/// each family, and every span kind the SQL reads is one a query captures.
 #[test]
 fn sql_covers_every_language() {
-    {
-        let dir = facts("");
-        for lang in tally::LANGS {
-            let expected = match lang.name {
-                "c" | "cpp" => "c",
-                "typescript" | "tsx" | "javascript" => "ecma",
-                other => other,
-            };
-            for ext in lang.exts {
-                assert_eq!(
-                    rows(&dir, &format!("select family('a/b.{ext}')")),
-                    format!("({expected})"),
-                    "{ext}"
-                );
-            }
-        }
-        assert_eq!(rows(&dir, "select family('a/b.md')"), "(NULL)");
-    }
-    {
-        let dir = facts("");
-        let sql = tally::SQL;
-        let families = rows(
-            &dir,
-            &format!(
-                "select distinct family('x.' || ext) from unnest([{}]) t(ext) order by 1",
-                tally::LANGS
-                    .iter()
-                    .flat_map(|l| l.exts)
-                    .map(|e| format!("'{e}'"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-        );
-        for family in families.split(' ').map(|f| f.trim_matches(['(', ')'])) {
-            for rule in [
-                format!("when '{family}' then"),
-                format!("where family(path) = '{family}'"),
-            ] {
-                assert!(sql.contains(rule.as_str()), "tally's SQL lacks `{rule}`");
-            }
-            let column = format!("family = '{family}') as {family}");
+    let dir = facts("");
+    for lang in codevitals::LANGS {
+        let expected = match lang.name {
+            "c" | "cpp" => "c",
+            "typescript" | "tsx" | "javascript" => "ecma",
+            other => other,
+        };
+        if !lang.exts.is_empty() {
             assert_eq!(
-                sql.matches(column.as_str()).count(),
-                3,
-                "every dependency metric needs the column {family}"
+                rows(&dir, &format!("select lang_family('{}')", lang.name)),
+                format!("({expected})"),
+                "{}",
+                lang.name
+            );
+        }
+        for ext in lang.exts {
+            assert_eq!(
+                rows(&dir, &format!("select family('a/b.{ext}')")),
+                format!("({expected})"),
+                "{ext}"
             );
         }
     }
-    {
-        let sql = tally::SQL;
-        let mut kinds = Vec::new();
-        for (i, _) in sql.match_indices("kind ") {
-            let rest = &sql[i + 5..];
-            let literals = if let Some(r) = rest.strip_prefix("= ") {
-                &r[..r
-                    .find(|c: char| c != '\'' && !c.is_ascii_lowercase() && c != '_')
-                    .unwrap()]
-            } else if let Some(r) = rest.strip_prefix("in (") {
-                &r[..r.find(')').unwrap()]
-            } else {
-                continue;
-            };
-            kinds.extend(literals.split('\'').filter(|k| {
-                k.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !k.is_empty()
-            }));
-        }
-        assert!(kinds.len() > 10, "{kinds:?}");
-        for kind in kinds {
+    assert_eq!(rows(&dir, "select family('a/b.md')"), "(NULL)");
+    let dir = facts("");
+    let sql = codevitals::SQL;
+    let families = rows(
+        &dir,
+        &format!(
+            "select distinct family('x.' || ext) from unnest([{}]) t(ext) order by 1",
+            codevitals::LANGS
+                .iter()
+                .flat_map(|l| l.exts)
+                .map(|e| format!("'{e}'"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    );
+    for family in families.split(' ').map(|f| f.trim_matches(['(', ')'])) {
+        for rule in [
+            format!("when '{family}' then"),
+            format!("where family(path) = '{family}'"),
+        ] {
             assert!(
-                kind == "file" || tally::KINDS.contains(&kind),
-                "the SQL reads span kind {kind:?}, which no query captures"
+                sql.contains(rule.as_str()),
+                "codevitals' SQL lacks `{rule}`"
             );
         }
+    }
+    // Every metric with a column per family has one for each: (complete, incomplete).
+    let names: Vec<String> = families
+        .split(' ')
+        .map(|f| format!("'{}'", f.trim_matches(['(', ')'])))
+        .collect();
+    assert_rows(
+        &dir,
+        &format!(
+            "select count(*) filter (n = {}), count(*) filter (n <> {}) from (
+               select count(*) as n from duckdb_columns()
+               where schema_name = 'metrics' and column_name in ({}) group by table_name)",
+            names.len(),
+            names.len(),
+            names.join(", ")
+        ),
+        "(12,0)",
+    );
+    let sql = codevitals::SQL;
+    let mut kinds = Vec::new();
+    for (i, _) in sql.match_indices("kind ") {
+        let rest = &sql[i + 5..];
+        let literals = if let Some(r) = rest.strip_prefix("= ") {
+            &r[..r
+                .find(|c: char| c != '\'' && !c.is_ascii_lowercase() && c != '_')
+                .unwrap()]
+        } else if let Some(r) = rest.strip_prefix("in (") {
+            &r[..r.find(')').unwrap()]
+        } else {
+            continue;
+        };
+        kinds.extend(
+            literals
+                .split('\'')
+                .filter(|k| k.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !k.is_empty()),
+        );
+    }
+    assert!(kinds.len() > 10, "{kinds:?}");
+    for kind in kinds {
+        assert!(
+            kind == "file" || codevitals::KINDS.contains(&kind),
+            "the SQL reads span kind {kind:?}, which no query captures"
+        );
     }
 }
 
@@ -628,11 +601,9 @@ fn commit_times_drop_a_lone_wrong_clock() {
            (2, 'c', timestamp '2026-01-03', 't', 'x'), (3, 'd', timestamp '2999-01-01', 't', 'x'),
            (4, 'e', timestamp '2026-01-05', 't', 'x'), (5, 'f', timestamp '2026-01-04', 't', 'x')",
     );
-    assert_eq!(
-        rows(
-            &dir,
-            "select seq, time::date from commit_times order by seq"
-        ),
-        "(0,2026-01-01) (1,2026-01-01) (2,2026-01-03) (3,2026-01-05) (4,2026-01-05) (5,2026-01-05)"
+    assert_rows(
+        &dir,
+        "select seq, time::date from commit_times order by seq",
+        "(0,2026-01-01) (1,2026-01-01) (2,2026-01-03) (3,2026-01-05) (4,2026-01-05) (5,2026-01-05)",
     );
 }

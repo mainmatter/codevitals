@@ -1,5 +1,5 @@
 -- Commit labels for the validation study: apply to a scanned database with
---   duckdb tally.duckdb < validation/commit_info.sql
+--   duckdb codevitals.duckdb < validation/commit_info.sql
 -- is_fix is the defect-fix rule checked in README.md here.
 
 create or replace view commit_info as
