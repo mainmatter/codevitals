@@ -2,6 +2,10 @@
 name = "tally"
 version = "0.1.0"
 edition = "2024"
+description = "Records a git repository's history and the structure of its code into DuckDB, and computes code-health metrics over it in SQL"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mainmatter/tally"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -15,17 +19,15 @@ tree-sitter = "=0.26.2"
 tree-sitter-c = "=0.24.2"
 tree-sitter-cpp = "=0.23.4"
 tree-sitter-javascript = "=0.25.0"
+tree-sitter-json = "=0.24.8"
 tree-sitter-python = "=0.25.0"
 tree-sitter-rust = "=0.24.2"
+tree-sitter-toml-ng = "=0.7.0"
 tree-sitter-typescript = "=0.23.2"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
-
-# The library is `extract` alone, so tests can call it; the binary is the rest.
-[lib]
-path = "src/extract.rs"
 
 # Tests plan many metric queries, so build DuckDB as in release even in test builds:
 # optimized, and without debug info, which libduckdb-sys turns into DuckDB's DEBUG

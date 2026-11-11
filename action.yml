@@ -1,0 +1,58 @@
+name: tally
+description: >-
+  Record the repository's history with tally and publish metrics.json as the only
+  commit of a branch, for a Grafana dashboard to read. Check the repository out
+  with its full history first (actions/checkout with fetch-depth: 0), and grant
+  the job `contents: write`.
+inputs:
+  metrics:
+    description: Metrics to compute, separated by spaces (`tally metrics --help` lists them); all when empty.
+    default: ""
+  branch:
+    description: Branch that receives metrics.json; force-pushed, so it never grows.
+    default: tally-metrics
+runs:
+  using: composite
+  steps:
+    - name: Install tally
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # The action lives at .../_actions/<owner>/<repo>/<ref>; its ref names the
+        # release whose binary it runs, so the action and tally never drift apart.
+        tag="$(basename "$ACTION_PATH")"
+        repo="$(basename "$(dirname "$(dirname "$ACTION_PATH")")")/$(basename "$(dirname "$ACTION_PATH")")"
+        if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+          echo "::error::$repo@$tag is not a release; pin the action to a release tag, e.g. $repo@v0.1.0"
+          exit 1
+        fi
+        asset="tally-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz"
+        gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$RUNNER_TEMP"
+        tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        echo "tally $tag from $repo"
+    - name: Scan and compute metrics
+      shell: bash
+      env:
+        METRICS: ${{ inputs.metrics }}
+      run: |
+        tally scan --db "$RUNNER_TEMP/tally.duckdb"
+        # METRICS is unquoted on purpose: one argument per name.
+        tally metrics --db "$RUNNER_TEMP/tally.duckdb" "$RUNNER_TEMP/metrics.json" $METRICS
+    - name: Publish metrics.json
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        TOKEN: ${{ github.token }}
+      run: |
+        out="$RUNNER_TEMP/tally-publish"
+        mkdir -p "$out" && cp "$RUNNER_TEMP/metrics.json" "$out/"
+        cd "$out"
+        git init -q && git checkout -q -b "$BRANCH"
+        git add metrics.json
+        git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "tally metrics for $GITHUB_SHA"
+        git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

@@ -70,8 +70,7 @@ pub fn rev(dir: &TempDir, spec: &str) -> String {
 }
 
 /// A git repository in `dir/repo`, written in process. Files accumulate in a working
-/// tree that each commit snapshots; author and committer are `t <t@t>`, as in
-/// `fixture.sh`, so equal content gives the same commit ids as real git.
+/// tree that each commit snapshots; author and committer are `t <t@t>`.
 pub struct Repo {
     pub dir: TempDir,
     repo: gix::Repository,
@@ -86,9 +85,11 @@ impl Repo {
         Repo { dir, repo, tree }
     }
 
-    pub fn write(&mut self, path: &str, content: impl AsRef<[u8]>) -> &mut Repo {
+    /// Writes `content` at `path`, which may be any bytes (git paths need not be UTF-8).
+    pub fn write(&mut self, path: impl AsRef<[u8]>, content: impl AsRef<[u8]>) -> &mut Repo {
         let blob = self.repo.write_blob(content).unwrap().detach();
         let mut editor = self.repo.edit_tree(self.tree).unwrap();
+        let path: &gix::bstr::BStr = path.as_ref().into();
         editor.upsert(path, EntryKind::Blob, blob).unwrap();
         self.tree = editor.write().unwrap().detach();
         self
@@ -127,6 +128,24 @@ impl Repo {
         id.unwrap().detach()
     }
 
+    /// Makes the repository a shallow clone cut at `boundary`: the commit stays, its
+    /// parent's object is deleted and `.git/shallow` names the boundary, as `git clone
+    /// --depth` leaves it.
+    pub fn make_shallow(&mut self, boundary: ObjectId) {
+        let parent = self
+            .repo
+            .find_commit(boundary)
+            .unwrap()
+            .parent_ids()
+            .next()
+            .unwrap()
+            .detach();
+        let hex = parent.to_string();
+        let git = self.dir.path().join("repo/.git");
+        std::fs::remove_file(git.join("objects").join(&hex[..2]).join(&hex[2..])).unwrap();
+        std::fs::write(git.join("shallow"), format!("{boundary}\n")).unwrap();
+    }
+
     /// Commits the working tree on top of `main`.
     pub fn extend(&mut self, message: &str, day: i64) -> ObjectId {
         let tip = self
@@ -139,8 +158,8 @@ impl Repo {
     }
 }
 
-/// The spec's fixture repository (`fixture.sh`), with its three functions named
-/// `add`, `plus` and `d`.
+/// The fixture repository: four commits on `main` (an edit, a rename, a merge of a
+/// side branch), with its three functions named `add`, `plus` and `d`.
 pub fn fixture() -> Repo {
     fixture_named("add", "plus", "d")
 }
@@ -176,8 +195,7 @@ pub fn fixture_named(add: &str, plus: &str, d: &str) -> Repo {
 /// tests that write facts directly with `history`.
 pub fn facts(history: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
-    execute(&dir, include_str!("../../src/schema.sql"));
-    execute(&dir, include_str!("../../src/metrics.sql"));
+    execute(&dir, tally::SQL);
     execute(&dir, history);
     dir
 }
@@ -197,7 +215,7 @@ pub fn random_history(
     format!(
         "insert into commits select seq, 'c' || seq, timestamp '2026-01-01' + to_days(seq::int), 't <t@t>', 'edit'
            from range({first}, {last}) r(seq);
-         insert into changes select seq, 'm' || (f % {modules}) || '/f' || f || '.rs', 'b' || seq || '-' || f
+         insert into changes (seq, path, blob) select seq, 'm' || (f % {modules}) || '/f' || f || '.rs', 'b' || seq || '-' || f
            from range({first}, {last}) c(seq), range({files}) g(f)
            qualify row_number() over (partition by seq order by md5(seq || ':' || f)) <= {per_commit};
          insert into spans (blob, v, lang, kind, line, tokens)

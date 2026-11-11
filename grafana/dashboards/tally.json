@@ -15,6 +15,12 @@
   "templating": {
     "list": [
       {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "yesoreyeram-infinity-datasource"
+      },
+      {
         "name": "metrics_url",
         "label": "Metrics URL",
         "type": "textbox",
@@ -39,7 +45,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.\nChange and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits, and faint lines span two standard errors. A dashed line at 1 marks chance: module boundaries make no difference.\nDependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.\nNo metric is validated against defects yet: read trends within this repository, not absolute values."
+        "content": "**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.\nChange and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits. The shaded band is a 95% confidence interval: movement inside it is noise. A dashed line at 1 marks chance: files are as far apart in the directory tree as at random.\nDependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.\nNo metric is validated against defects yet: read trends within this repository, not absolute values."
       }
     },
     {
@@ -59,10 +65,10 @@
       "id": 3,
       "type": "timeseries",
       "title": "Production code size",
-      "description": "SIZE. What: production code at each commit, in tokens (value) and files; tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
+      "description": "What: production code at each commit, in tokens (value) and files; tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -75,7 +81,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -85,7 +91,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_size",
+          "root_selector": "$.size",
           "format": "timeseries",
           "columns": [
             {
@@ -187,11 +193,11 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Commits crossing modules (vs chance) ↓",
-      "description": "CHANGES. What: how often files changed in the same commit sit in different modules, relative to chance, over the last 100 code commits each week. Lower is better.\n\nRead: 1 means module boundaries make no difference to what changes together; below 1, modules change independently. Dashed lines span two standard errors.\n\nTrend: rising means modules must change together more, through coupling no import shows. Change coupling correlates with defects.",
+      "title": "Distance between files changed together (vs chance) ↓",
+      "description": "What: how far apart in the directory tree the files changed by one commit are, relative to chance, over the last 100 code commits each week. Lower is better.\n\nRead: 1 means changes pair up files as if at random; below 1, a commit's files sit close together. observed is the mean distance in directory steps (0: same directory, 2: sibling directories), expected its chance level. The shaded band is a 95% confidence interval for this average: movement inside it is noise.\n\nTrend: rising means work spreads across the tree: what changes together does not live together. Change coupling correlates with defects.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -204,7 +210,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -214,7 +220,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_hidden_coupling",
+          "root_selector": "$.co_change_distance",
           "format": "timeseries",
           "columns": [
             {
@@ -224,17 +230,17 @@
             },
             {
               "selector": "value",
-              "text": "Commits crossing modules (vs chance)",
+              "text": "Distance between files changed together (vs chance)",
               "type": "number"
             },
             {
               "selector": "low",
-              "text": "-2 standard errors",
+              "text": "95% confidence (low)",
               "type": "number"
             },
             {
               "selector": "high",
-              "text": "+2 standard errors",
+              "text": "95% confidence",
               "type": "number"
             }
           ]
@@ -272,7 +278,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Commits crossing modules (vs chance)"
+              "options": "Distance between files changed together (vs chance)"
             },
             "properties": [
               {
@@ -287,7 +293,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "-2 standard errors"
+              "options": "95% confidence (low)"
             },
             "properties": [
               {
@@ -298,13 +304,15 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.hideFrom",
                 "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": false
                 }
               }
             ]
@@ -312,7 +320,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "+2 standard errors"
+              "options": "95% confidence"
             },
             "properties": [
               {
@@ -323,14 +331,16 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
-                "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
-                }
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.fillBelowTo",
+                "value": "95% confidence (low)"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 25
               }
             ]
           }
@@ -352,10 +362,10 @@
       "id": 6,
       "type": "timeseries",
       "title": "Rework within 7 days ↓",
-      "description": "CHANGES. What: the share of edits to files already changed in the previous 7 days, over the last 100 code commits each week. Lower is better.\n\nRead: 0.2 means a fifth of a typical commit's edits rework last week's code. Expect high values during feature work.\n\nTrend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.",
+      "description": "What: the share of edits to files already changed in the previous 7 days, over the last 100 code commits each week. Lower is better.\n\nRead: 0.2 means a fifth of a typical commit's edits rework last week's code. Expect high values during feature work.\n\nTrend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -368,7 +378,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -378,7 +388,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_rework",
+          "root_selector": "$.rework",
           "format": "timeseries",
           "columns": [
             {
@@ -393,12 +403,12 @@
             },
             {
               "selector": "low",
-              "text": "-2 standard errors",
+              "text": "95% confidence (low)",
               "type": "number"
             },
             {
               "selector": "high",
-              "text": "+2 standard errors",
+              "text": "95% confidence",
               "type": "number"
             }
           ]
@@ -435,7 +445,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "-2 standard errors"
+              "options": "95% confidence (low)"
             },
             "properties": [
               {
@@ -446,13 +456,15 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.hideFrom",
                 "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": false
                 }
               }
             ]
@@ -460,7 +472,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "+2 standard errors"
+              "options": "95% confidence"
             },
             "properties": [
               {
@@ -471,14 +483,16 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
-                "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
-                }
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.fillBelowTo",
+                "value": "95% confidence (low)"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 25
               }
             ]
           }
@@ -500,10 +514,10 @@
       "id": 7,
       "type": "timeseries",
       "title": "File ownership by top author ↑",
-      "description": "CHANGES. What: for files changed at least twice in the last 100 code commits, the share of changes made by their most active author, each week. Higher is better.\n\nRead: 0.8 means a typical file's main author made 80% of its changes. Dashed lines span two standard errors.\n\nTrend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.",
+      "description": "What: for files changed at least twice in the last 100 code commits, the share of changes made by their most active author, each week. Higher is better.\n\nRead: 0.8 means a typical file's main author made 80% of its changes. The shaded band is a 95% confidence interval for this average: movement inside it is noise.\n\nTrend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -516,7 +530,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -526,7 +540,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_ownership",
+          "root_selector": "$.ownership",
           "format": "timeseries",
           "columns": [
             {
@@ -541,12 +555,12 @@
             },
             {
               "selector": "low",
-              "text": "-2 standard errors",
+              "text": "95% confidence (low)",
               "type": "number"
             },
             {
               "selector": "high",
-              "text": "+2 standard errors",
+              "text": "95% confidence",
               "type": "number"
             }
           ]
@@ -583,7 +597,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "-2 standard errors"
+              "options": "95% confidence (low)"
             },
             "properties": [
               {
@@ -594,13 +608,15 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.hideFrom",
                 "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": false
                 }
               }
             ]
@@ -608,7 +624,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "+2 standard errors"
+              "options": "95% confidence"
             },
             "properties": [
               {
@@ -619,14 +635,16 @@
                 }
               },
               {
-                "id": "custom.lineStyle",
-                "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
-                }
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.fillBelowTo",
+                "value": "95% confidence (low)"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 25
               }
             ]
           }
@@ -661,14 +679,14 @@
       "id": 9,
       "type": "timeseries",
       "title": "Work spread: effective files",
-      "description": "ENTROPY. What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
+      "description": "What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 25
       },
@@ -677,7 +695,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -687,7 +705,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_change_entropy",
+          "root_selector": "$.change_entropy",
           "format": "timeseries",
           "columns": [
             {
@@ -779,126 +797,6 @@
     },
     {
       "id": 10,
-      "type": "timeseries",
-      "title": "Work spread: effective modules",
-      "description": "ENTROPY. What: over how many modules the work of the last 100 code commits is effectively spread, each week.\n\nRead: 3 means as if spread evenly over 3 modules; it cannot exceed the module count (right axis).\n\nTrend: rising while the module count holds means work scatters; rising with it may only mean the code was split.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 25
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_module_entropy",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Work spread: effective modules",
-              "type": "number"
-            },
-            {
-              "selector": "modules",
-              "text": "modules",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0,
-            "scaleDistribution": {
-              "type": "log",
-              "log": 2
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Work spread: effective modules"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "modules"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 11,
       "type": "row",
       "title": "Code structure",
       "collapsed": false,
@@ -911,13 +809,13 @@
       "panels": []
     },
     {
-      "id": 12,
+      "id": 11,
       "type": "timeseries",
       "title": "Encapsulated code share ↑",
-      "description": "STRUCTURE. What: the share of function code in non-public functions (no pub, static, not exported, leading underscore). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare by_language over time.\n\nTrend: falling means the public surface grows faster than the code behind it.",
+      "description": "What: the share of function code in non-public functions (no pub, static, not exported, leading underscore). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare by_language over time.\n\nTrend: falling means the public surface grows faster than the code behind it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -930,7 +828,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -940,7 +838,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_encapsulation",
+          "root_selector": "$.encapsulation",
           "format": "timeseries",
           "columns": [
             {
@@ -999,13 +897,13 @@
       }
     },
     {
-      "id": 13,
+      "id": 12,
       "type": "timeseries",
       "title": "Duplicated code share ↓",
-      "description": "STRUCTURE. What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals. Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
+      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals. Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1018,7 +916,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1028,7 +926,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_duplication",
+          "root_selector": "$.duplication",
           "format": "timeseries",
           "columns": [
             {
@@ -1087,13 +985,13 @@
       }
     },
     {
-      "id": 14,
+      "id": 13,
       "type": "timeseries",
       "title": "Code in large functions ↓",
-      "description": "STRUCTURE. What: the share of function code in functions over 200 tokens. Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare by_language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
+      "description": "What: the share of function code in functions over 200 tokens. Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare by_language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1106,7 +1004,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1116,7 +1014,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_concentration",
+          "root_selector": "$.concentration",
           "format": "timeseries",
           "columns": [
             {
@@ -1175,7 +1073,7 @@
       }
     },
     {
-      "id": 15,
+      "id": 14,
       "type": "row",
       "title": "Local complexity",
       "collapsed": false,
@@ -1188,13 +1086,13 @@
       "panels": []
     },
     {
-      "id": 16,
+      "id": 15,
       "type": "timeseries",
       "title": "Decision points per 100 tokens",
-      "description": "COMPLEXITY. What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens.\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare by_language over time.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
+      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens.\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare by_language over time.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1207,7 +1105,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1217,7 +1115,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_decisions",
+          "root_selector": "$.decisions",
           "format": "timeseries",
           "columns": [
             {
@@ -1276,13 +1174,13 @@
       }
     },
     {
-      "id": 17,
+      "id": 16,
       "type": "timeseries",
       "title": "Block nesting below function body",
-      "description": "COMPLEXITY. What: how many blocks deep function code sits below the function body, weighted by tokens; deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
+      "description": "What: how many blocks deep function code sits below the function body, weighted by tokens; deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1295,7 +1193,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1305,7 +1203,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_nesting",
+          "root_selector": "$.nesting",
           "format": "timeseries",
           "columns": [
             {
@@ -1392,7 +1290,7 @@
       }
     },
     {
-      "id": 18,
+      "id": 17,
       "type": "row",
       "title": "Non-local control flow and state",
       "collapsed": false,
@@ -1405,13 +1303,13 @@
       "panels": []
     },
     {
-      "id": 19,
+      "id": 18,
       "type": "timeseries",
       "title": "Global mutable state per 1,000 tokens",
-      "description": "NONLOCAL. What: declarations of global mutable state per 1,000 production tokens: Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare by_language over time.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
+      "description": "What: declarations of global mutable state per 1,000 production tokens: Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare by_language over time.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1424,7 +1322,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1434,7 +1332,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_global_state",
+          "root_selector": "$.global_state",
           "format": "timeseries",
           "columns": [
             {
@@ -1493,13 +1391,13 @@
       }
     },
     {
-      "id": 20,
+      "id": 19,
       "type": "timeseries",
       "title": "Throws and panics per 1,000 tokens",
-      "description": "NONLOCAL. What: non-local exits per 1,000 production tokens: throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare by_language.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
+      "description": "What: non-local exits per 1,000 production tokens: throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare by_language.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1512,7 +1410,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1522,7 +1420,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_exceptions",
+          "root_selector": "$.exceptions",
           "format": "timeseries",
           "columns": [
             {
@@ -1581,13 +1479,13 @@
       }
     },
     {
-      "id": 21,
+      "id": 20,
       "type": "timeseries",
       "title": "goto per 1,000 C/C++ tokens",
-      "description": "NONLOCAL. What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
+      "description": "What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1600,7 +1498,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1610,7 +1508,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_goto",
+          "root_selector": "$.goto",
           "format": "timeseries",
           "columns": [
             {
@@ -1669,7 +1567,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 21,
       "type": "row",
       "title": "Dependencies through imports",
       "collapsed": false,
@@ -1682,13 +1580,13 @@
       "panels": []
     },
     {
-      "id": 23,
+      "id": 22,
       "type": "timeseries",
       "title": "Share of its language's code a file depends on ↓",
-      "description": "DEPENDENCIES. What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
+      "description": "What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1701,7 +1599,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1711,7 +1609,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_dependency_reach",
+          "root_selector": "$.dependency_reach",
           "format": "timeseries",
           "columns": [
             {
@@ -1830,13 +1728,13 @@
       }
     },
     {
-      "id": 24,
+      "id": 23,
       "type": "timeseries",
-      "title": "Imports crossing modules (vs chance) ↓",
-      "description": "DEPENDENCIES. What: how often imports cross module boundaries, relative to chance, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means modules make no difference to what imports what; below 1, files mostly import within their module.\n\nTrend: rising means modules lean on each other more and stop matching the code's structure. Steps when modules are split or merged.",
+      "title": "Distance imports reach (vs chance) ↓",
+      "description": "What: how far through the directory tree imports reach, relative to chance, each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means imports reach as far as if rewired at random; below 1, files mostly import their neighbours. edges is the number of importing file pairs.\n\nTrend: rising means code depends on code ever further away: the tree stops matching the structure. Moving files steps it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -1849,7 +1747,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -1859,7 +1757,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_cross_module_imports",
+          "root_selector": "$.import_distance",
           "format": "timeseries",
           "columns": [
             {
@@ -1994,13 +1892,13 @@
       }
     },
     {
-      "id": 25,
+      "id": 24,
       "type": "timeseries",
-      "title": "How changed files rank by dependencies",
-      "description": "DEPENDENCIES. What: how the files changed by commits rank among the files of their language by reach (the files they depend on), over the last 100 code commits each week.\n\nRead: 50% means work lands on typical files; 70% means on files that depend on more than 70% of their peers do. Active files usually rank high: read the trend. reach is their mean reach in files.\n\nTrend: rising means work concentrates on code that needs more context to change safely. Unvalidated.",
+      "title": "How complete the dependency metrics are, per language",
+      "description": "What: the share of each language's imports of this repository's own code that tally could follow to a file, each week (c, rust, python, ecma).\n\nRead: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency metrics became less complete, not that the code changed.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "h": 9,
@@ -2013,7 +1911,7 @@
           "refId": "A",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
+            "uid": "${datasource}"
           },
           "type": "json",
           "source": "url",
@@ -2023,183 +1921,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_changed_file_reach",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "How changed files rank by dependencies",
-              "type": "number"
-            },
-            {
-              "selector": "low",
-              "text": "-2 standard errors",
-              "type": "number"
-            },
-            {
-              "selector": "high",
-              "text": "+2 standard errors",
-              "type": "number"
-            },
-            {
-              "selector": "reach",
-              "text": "files they depend on",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "How changed files rank by dependencies"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "-2 standard errors"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "+2 standard errors"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              },
-              {
-                "id": "custom.lineStyle",
-                "value": {
-                  "fill": "dash",
-                  "dash": [
-                    4,
-                    4
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "files they depend on"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#c98500"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 26,
-      "type": "timeseries",
-      "title": "Imports resolved (coverage of the charts beside)",
-      "description": "DEPENDENCIES. What: the share of imports naming this repository that resolve to a file, per language (c, rust, python, ecma). External code is left out.\n\nRead: the dependency charts miss what this misses. fallback_share counts imports resolved only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency charts read too low, not that the code changed.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 0,
-        "y": 74
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_import_coverage",
+          "root_selector": "$.import_coverage",
           "format": "timeseries",
           "columns": [
             {

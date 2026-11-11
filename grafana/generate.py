@@ -1,65 +1,49 @@
-"""Generate grafana/dashboards/tally.json from the metric views in src/metrics.sql.
+"""Generate grafana/dashboards/tally.json from the metric views in sql/metrics.sql.
 
 Run from the repository root after changing a metric: python3 grafana/generate.py
 The test `dashboard_matches_metrics` fails until the dashboard is regenerated.
-Each panel's description is its view's comment: a category, then What, Read and
-Trend paragraphs.
+A view's comment gives its panel: a first line `CATEGORY: Title` (the row and the
+title), then What, Read and Trend paragraphs (the description).
 """
 import json
 import re
 
-sql = open("src/metrics.sql").read()
+sql = open("sql/metrics.sql").read()
 comments = {m.group(1): m.group(2).replace("''", "'")
-            for m in re.finditer(r"comment on view (m_\w+) is '((?:[^']|'')*)';", sql)}
-views = re.findall(r"create or replace view (m_\w+)", sql)
+            for m in re.finditer(r"comment on view metrics\.(\w+) is '((?:[^']|'')*)';", sql)}
+# A comment's first line is `CATEGORY: Title`; the paragraphs after it describe the panel.
+CATEGORIES = {v: c.split("\n", 1)[0].split(": ", 1)[0] for v, c in comments.items()}
+TITLES = {v: c.split("\n", 1)[0].split(": ", 1)[1] for v, c in comments.items()}
+DESCRIPTIONS = {v: c.split("\n\n", 1)[1] for v, c in comments.items()}
+views = re.findall(r"create or replace view metrics\.(\w+)", sql)
 assert set(views) == set(comments), (views, comments.keys())
 
-DS = {"type": "yesoreyeram-infinity-datasource", "uid": "tally-infinity"}
-TITLES = {
-    "m_size": "Production code size",
-    "m_hidden_coupling": "Commits crossing modules (vs chance)",
-    "m_rework": "Rework within 7 days",
-    "m_change_entropy": "Work spread: effective files",
-    "m_module_entropy": "Work spread: effective modules",
-    "m_ownership": "File ownership by top author",
-    "m_decisions": "Decision points per 100 tokens",
-    "m_nesting": "Block nesting below function body",
-    "m_global_state": "Global mutable state per 1,000 tokens",
-    "m_exceptions": "Throws and panics per 1,000 tokens",
-    "m_goto": "goto per 1,000 C/C++ tokens",
-    "m_encapsulation": "Encapsulated code share",
-    "m_duplication": "Duplicated code share",
-    "m_concentration": "Code in large functions",
-    "m_dependency_reach": "Share of its language's code a file depends on",
-    "m_cross_module_imports": "Imports crossing modules (vs chance)",
-    "m_changed_file_reach": "How changed files rank by dependencies",
-    "m_import_coverage": "Imports resolved (coverage of the charts beside)",
-}
-UNITS = {"m_size": "short", "m_hidden_coupling": "none", "m_change_entropy": "none",
-         "m_module_entropy": "none", "m_decisions": "none", "m_nesting": "none",
-         "m_global_state": "none", "m_exceptions": "none", "m_goto": "none",
-         "m_cross_module_imports": "none"}  # others are shares in [0, 1]
-LIFTS = {"m_hidden_coupling", "m_cross_module_imports"}  # 1 = chance; drawn as a dashed reference line
+# The Infinity data source is a dashboard variable, so the dashboard imports into any
+# Grafana (Grafana Cloud included) whatever the data source's uid there.
+DS = {"type": "yesoreyeram-infinity-datasource", "uid": "${datasource}"}
+UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none",
+         "decisions": "none", "nesting": "none",
+         "global_state": "none", "exceptions": "none", "goto": "none",
+         "import_distance": "none"}  # others are shares in [0, 1]
+LIFTS = {"co_change_distance", "import_distance"}  # 1 = chance; drawn as a dashed reference line
 # Drawn as one line per language family instead of the combined value, which moves
 # with the language mix.
-FAMILIES = {"m_dependency_reach", "m_cross_module_imports", "m_import_coverage"}
+FAMILIES = {"dependency_reach", "import_distance", "import_coverage"}
 FAMILY_LABELS = {"c": "C/C++", "rust": "Rust", "python": "Python", "ecma": "JS/TS"}
 # Categorical series colours for Grafana's dark theme, in fixed order: blue, orange,
 # aqua, yellow (dataviz reference palette, dark steps). Checked against the dark
 # panel surface #181b1f for colour-vision-deficiency separation and contrast.
 PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500"]
-SECOND_AXIS = {"m_size": ("files", "files"),  # an extra series on the right axis
-               "m_nesting": ("deep_share", "share nested deeper than 3"),
-               "m_change_entropy": ("files_per_commit", "files per commit"),
-               "m_module_entropy": ("modules", "modules"),
-               "m_changed_file_reach": ("reach", "files they depend on")}
-LOG_SCALE = {"m_change_entropy", "m_module_entropy"}
-BANDS = {"m_hidden_coupling", "m_rework", "m_ownership", "m_changed_file_reach"}  # low/high columns: two standard errors
+SECOND_AXIS = {"size": ("files", "files"),  # an extra series on the right axis
+               "nesting": ("deep_share", "share nested deeper than 3"),
+               "change_entropy": ("files_per_commit", "files per commit")}
+LOG_SCALE = {"change_entropy"}
+BANDS = {"co_change_distance", "rework", "ownership"}  # low/high columns: two standard errors
 ROWS = {"SIZE": "Size", "CHANGES": "How changes spread", "ENTROPY": "Entropy of change",
         "STRUCTURE": "Code structure", "COMPLEXITY": "Local complexity",
         "NONLOCAL": "Non-local control flow and state", "DEPENDENCIES": "Dependencies through imports"}
 GUIDE = """**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.
-Change and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits, and faint lines span two standard errors. A dashed line at 1 marks chance: module boundaries make no difference.
+Change and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits. The shaded band is a 95% confidence interval: movement inside it is noise. A dashed line at 1 marks chance: files are as far apart in the directory tree as at random.
 Dependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.
 No metric is validated against defects yet: read trends within this repository, not absolute values."""
 
@@ -82,9 +66,16 @@ def panel(pid, view, x, y, w):
     if view in FAMILIES:
         columns = [{"selector": f, "text": label, "type": "number"} for f, label in FAMILY_LABELS.items()]
     if view in BANDS:
-        for column, label in (("low", "-2 standard errors"), ("high", "+2 standard errors")):
-            columns.append({"selector": column, "text": label, "type": "number"})
-            style[label] = [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [4, 4]}}]
+        # The 95% confidence interval of the window's mean (two standard errors) as a
+        # shaded band: the upper bound fills down to the lower one, and neither draws a line.
+        low, high = "95% confidence (low)", "95% confidence"
+        columns.append({"selector": "low", "text": low, "type": "number"})
+        columns.append({"selector": "high", "text": high, "type": "number"})
+        style[low] = [{"id": "custom.lineWidth", "value": 0},
+                      {"id": "custom.hideFrom", "value": {"legend": True, "tooltip": False, "viz": False}}]
+        style[high] = [{"id": "custom.lineWidth", "value": 0},
+                       {"id": "custom.fillBelowTo", "value": low},
+                       {"id": "custom.fillOpacity", "value": 25}]
     if view in SECOND_AXIS:
         column, label = SECOND_AXIS[view]
         columns.append({"selector": column, "text": label, "type": "number"})
@@ -108,7 +99,7 @@ def panel(pid, view, x, y, w):
                                             {"color": "text", "value": 1}]}
         defaults["custom"]["thresholdsStyle"] = {"mode": "dashed"}
     return {"id": pid, "type": "timeseries", "title": TITLES[view] + arrow(view),
-            "description": comments[view], "datasource": DS,
+            "description": DESCRIPTIONS[view], "datasource": DS,
             "gridPos": {"h": 9, "w": w, "x": x, "y": y}, "targets": targets,
             "fieldConfig": {"defaults": defaults, "overrides": overrides},
             "options": {"legend": {"showLegend": len(columns) > 1, "displayMode": "list",
@@ -121,7 +112,7 @@ panels = [{"id": 1, "type": "text", "title": "", "gridPos": {"h": 4, "w": 24, "x
 pid, y = 2, 4
 groups = {}
 for v in views:
-    groups.setdefault(comments[v].split(".", 1)[0].strip(), []).append(v)
+    groups.setdefault(CATEGORIES[v], []).append(v)
 for category, vs in groups.items():
     panels.append({"id": pid, "type": "row", "title": ROWS[category], "collapsed": False,
                    "gridPos": {"h": 1, "w": 24, "x": 0, "y": y}, "panels": []})
@@ -136,7 +127,9 @@ for category, vs in groups.items():
 dashboard = {
     "uid": "tally", "title": "tally", "tags": ["tally"], "editable": True, "schemaVersion": 39,
     "time": {"from": "now-15y", "to": "now"}, "timezone": "utc", "graphTooltip": 1,
-    "templating": {"list": [{"name": "metrics_url", "label": "Metrics URL", "type": "textbox",
+    "templating": {"list": [{"name": "datasource", "label": "Data source", "type": "datasource",
+                             "query": "yesoreyeram-infinity-datasource"},
+                            {"name": "metrics_url", "label": "Metrics URL", "type": "textbox",
                              "query": "http://127.0.0.1:8123/metrics.json",
                              "current": {"text": "http://127.0.0.1:8123/metrics.json",
                                          "value": "http://127.0.0.1:8123/metrics.json"}}]},

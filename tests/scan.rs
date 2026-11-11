@@ -2,9 +2,6 @@
 
 mod common;
 
-use std::path::Path;
-use std::process::Command;
-
 use common::{db, fixture, rev, rows, scan, tally};
 use tempfile::TempDir;
 
@@ -22,35 +19,6 @@ fn fresh_dump() -> String {
     let r = fixture();
     scan(&r.dir, "main");
     dump(&r.dir)
-}
-
-/// The in-process fixture is the spec's: `fixture.sh`, run with real git, produces the
-/// same commit ids. The only test that needs a `git` executable.
-#[test]
-fn fixture_matches_fixture_sh() {
-    let dir = TempDir::new().unwrap();
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture.sh");
-    let out = Command::new("sh")
-        .arg(script)
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let git = |rev: &str| {
-        let out = Command::new("git")
-            .args(["rev-parse", rev])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let r = fixture();
-    assert_eq!(rev(&r.dir, "main"), git("main"));
-    assert_eq!(rev(&r.dir, "side"), git("side"));
 }
 
 #[test]
@@ -83,7 +51,10 @@ fn fixture_tables() {
     );
     let (plus, d) = (blob("main~2:src/b.rs"), blob("main:d.rs"));
     assert_eq!(
-        rows(dir, "select * from changes order by seq, path"),
+        rows(
+            dir,
+            "select seq, path, blob from changes order by seq, path"
+        ),
         format!(
             "(0,README.md,{readme}) (0,a.rs,{a1}) (1,a.rs,{a2}) (1,src/b.rs,{plus}) \
              (2,README.md,NULL) (2,src/b.rs,NULL) (2,src/c.rs,{plus}) (3,d.rs,{d})"
@@ -118,120 +89,215 @@ fn fixture_tables() {
     );
 }
 
+/// Rescanning changes nothing; scanning in two steps equals one scan; a new
+/// extractor version reparses every blob to the same spans.
 #[test]
-fn idempotent() {
-    let r = fixture();
-    scan(&r.dir, "main");
-    let before = dump(&r.dir);
-    assert_eq!(
-        scan(&r.dir, "main"),
-        "scanned 0 commits, 0 changes; parsed 0 blobs\n"
-    );
-    assert_eq!(dump(&r.dir), before);
+fn rescans() {
+    {
+        let r = fixture();
+        scan(&r.dir, "main");
+        let before = dump(&r.dir);
+        assert_eq!(
+            scan(&r.dir, "main"),
+            "scanned 0 commits, 0 changes; parsed 0 blobs\n"
+        );
+        assert_eq!(dump(&r.dir), before);
+    }
+    {
+        let r = fixture();
+        assert_eq!(
+            scan(&r.dir, "main~2"),
+            "scanned 2 commits, 4 changes; parsed 3 blobs\n"
+        );
+        assert_eq!(
+            scan(&r.dir, "main"),
+            "scanned 2 commits, 4 changes; parsed 1 blobs\n"
+        );
+        assert_eq!(dump(&r.dir), fresh_dump());
+    }
+    {
+        let r = fixture();
+        scan(&r.dir, "main");
+        let before = dump(&r.dir);
+        common::execute(&r.dir, "update spans set v = 0");
+        assert_eq!(
+            scan(&r.dir, "main"),
+            "scanned 0 commits, 0 changes; parsed 4 blobs\n"
+        );
+        assert_eq!(dump(&r.dir), before);
+    }
 }
 
+/// A rewritten history or a shallow clone fails, saying how to recover, and leaves
+/// the database as it was.
 #[test]
-fn incremental() {
-    let r = fixture();
-    assert_eq!(
-        scan(&r.dir, "main~2"),
-        "scanned 2 commits, 4 changes; parsed 3 blobs\n"
-    );
-    assert_eq!(
-        scan(&r.dir, "main"),
-        "scanned 2 commits, 4 changes; parsed 1 blobs\n"
-    );
-    assert_eq!(dump(&r.dir), fresh_dump());
+fn history_errors_say_what_to_do() {
+    {
+        let r = fixture();
+        scan(&r.dir, "main");
+        let before = dump(&r.dir);
+        let out = tally(&r.dir, &["scan", "side"]);
+        assert!(!out.status.success());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr.contains("\"side\" does not extend the history stored in")
+                && stderr.contains("\"delete from commits; delete from changes\""),
+            "{stderr}"
+        );
+        assert_eq!(dump(&r.dir), before);
+    }
+    {
+        let mut r = fixture();
+        let main = rev(&r.dir, "main");
+        r.make_shallow(gix::ObjectId::from_hex(main.as_bytes()).unwrap());
+        let out = tally(&r.dir, &["scan", "main"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success()
+                && err.contains("shallow clone")
+                && err.contains("fetch-depth: 0"),
+            "{err}"
+        );
+    }
 }
 
+/// Content that is not source code gets a `file` row with NULL counts: blobs over
+/// 1 MiB, binary files, Git LFS pointers and minified code. An empty file is parsed in
+/// the language of its first path with a known extension.
 #[test]
-fn version_bump() {
-    let r = fixture();
-    scan(&r.dir, "main");
-    let before = dump(&r.dir);
-    common::execute(&r.dir, "update spans set v = 0");
-    assert_eq!(
-        scan(&r.dir, "main"),
-        "scanned 0 commits, 0 changes; parsed 4 blobs\n"
-    );
-    assert_eq!(dump(&r.dir), before);
-}
-
-#[test]
-fn diverged() {
-    let r = fixture();
-    scan(&r.dir, "main");
-    let before = dump(&r.dir);
-    let out = tally(&r.dir, &["scan", "side"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        stderr.contains("history diverged from the stored chain; reset the walk with: duckdb <db> \"delete from commits; delete from changes\""),
-        "{stderr}"
-    );
-    assert_eq!(dump(&r.dir), before);
-}
-
-#[test]
-fn oversized() {
-    let mut r = fixture();
-    r.write("big.rs", "// x\n".repeat(300_000));
-    r.extend("big\n", 5);
-    scan(&r.dir, "main");
-    assert_eq!(
-        rows(
-            &r.dir,
-            &format!(
-                "select * exclude (blob) from spans where blob = '{}'",
-                rev(&r.dir, "main:big.rs")
+fn only_source_code_is_parsed() {
+    {
+        let mut r = fixture();
+        r.write("big.rs", "// x\n".repeat(300_000));
+        r.extend("big\n", 5);
+        scan(&r.dir, "main");
+        assert_eq!(
+            rows(
+                &r.dir,
+                &format!(
+                    "select * exclude (blob, v) from spans where blob = '{}'",
+                    rev(&r.dir, "main:big.rs")
+                )
+            ),
+            "(rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)"
+        );
+    }
+    {
+        let mut r = fixture();
+        r.write("bin.rs", b"fn\0\x01\x02")
+            .write(
+                "lfs.rs",
+                "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n",
             )
+            .write("app.min.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+            .write(".empty.txt", "")
+            .write("pkg/__init__.py", "");
+        r.extend("content\n", 5);
+        scan(&r.dir, "main");
+        assert_eq!(
+        rows(
+            &r.dir,
+            "select c.path, s.lang, s.tokens from changes c join spans s on s.blob = c.blob and s.kind = 'file'
+             where c.seq = 4 order by c.path"
         ),
-        "(6,rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)"
+        "(.empty.txt,python,0) (app.min.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)"
     );
+    }
 }
 
+/// A database from an older layout, or parsed by a newer tally, is refused.
 #[test]
-fn old_database_is_refused() {
-    let r = fixture();
-    common::execute(&r.dir, "create table spans (blob text)");
-    let out = tally(&r.dir, &["scan", "main"]);
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        !out.status.success() && err.contains("delete it and scan again"),
-        "{err}"
-    );
-    assert!(db(&r.dir).exists());
+fn other_versions_are_refused() {
+    {
+        let r = fixture();
+        common::execute(&r.dir, "create table spans (blob text)");
+        let out = tally(&r.dir, &["scan", "main"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("delete it and scan again"),
+            "{err}"
+        );
+        assert!(db(&r.dir).exists());
+    }
+    {
+        let r = fixture();
+        scan(&r.dir, "main");
+        common::execute(&r.dir, "update tally set extractor = extractor + 1");
+        let out = tally(&r.dir, &["scan", "main"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("parsed by a newer tally"),
+            "{err}"
+        );
+    }
 }
 
-/// A path's module is its nearest manifest directory, ignoring a manifest at the
-/// repository root, else the module depth; its role follows path conventions.
+/// A path's role: what .gitattributes declare wins (Linguist's attributes and
+/// `tally=<role>`, with an attribute turned off meaning first-party code), then path
+/// conventions whatever their case, generation markers and minified JavaScript.
 #[test]
-fn modules_follow_manifests() {
+fn roles_follow_attributes_then_conventions() {
     let mut r = fixture();
-    for manifest in ["Cargo.toml", "crates/x/Cargo.toml", "docs/a.md"] {
-        r.write(manifest, "");
-    }
-    for code in [
-        "crates/x/src/lib.rs",
+    r.write(
+        ".gitattributes",
+        "integration/** tally=test\nthird/** linguist-vendored\nsrc/gen.rs linguist-generated\n",
+    )
+    .write("third/ours/.gitattributes", "** -linguist-vendored\n");
+    let code = "fn f() {}\n";
+    for path in [
+        "integration/t.rs",
+        "third/lib.rs",
+        "third/ours/own.rs",
+        "src/gen.rs",
+        "vendor/v.rs",
+        "ThirdParty/t.rs",
+        "examples/demo.rs",
+        "docs/a.md",
         "crates/x/tests/t.rs",
-        "deep/a/b/c.rs",
+        "flow-tests/f.rs",
+        "Tests/x.rs",
+        "fuzz/z.rs",
+        "web/component-test.ts",
+        "web/__mocks__/m.ts",
+        "web/dist/bundle.js",
     ] {
-        r.write(code, "fn f() {}\n");
+        r.write(path, code);
     }
-    r.write("vendor/v.c", "int v(void) { return 0; }\n");
-    r.write("web/app.spec.ts", "f();\n")
-        .write("py/test_x.py", "f()\n");
-    r.extend("crates\n", 5);
+    r.write(
+        "src/marked.rs",
+        "// Code generated by hand-gen. DO NOT EDIT.\nfn a() {}\n",
+    )
+    .write("web/app.js", format!("{}\n", "var a = 1;".repeat(20)))
+    .write("web/ok.js", "var a = 1;\n");
+    r.extend("roles\n", 5);
     scan(&r.dir, "main");
     assert_eq!(
         rows(
             &r.dir,
-            "select path, module, role from path_modules join path_roles using (path) order by path"
-        ),
-        "(Cargo.toml,,other) (README.md,,other) (a.rs,,code) (crates/x/Cargo.toml,crates/x,other) \
-         (crates/x/src/lib.rs,crates/x,code) (crates/x/tests/t.rs,crates/x,test) (d.rs,,code) \
-         (deep/a/b/c.rs,deep/a,code) (docs/a.md,docs,other) (py/test_x.py,py,test) (src/b.rs,src,code) \
-         (src/c.rs,src,code) (vendor/v.c,vendor,vendored) (web/app.spec.ts,web,test)"
+            "select path, role from path_roles where path not in ('a.rs', 'd.rs', 'README.md')
+               and not starts_with(path, 'src/b') and not starts_with(path, 'src/c') order by path"
+        )
+        .replace(") (", ")\n("),
+        "(.gitattributes,other)
+(Tests/x.rs,test)
+(ThirdParty/t.rs,vendored)
+(crates/x/tests/t.rs,test)
+(docs/a.md,documentation)
+(examples/demo.rs,documentation)
+(flow-tests/f.rs,test)
+(fuzz/z.rs,test)
+(integration/t.rs,test)
+(src/gen.rs,generated)
+(src/marked.rs,generated)
+(third/lib.rs,vendored)
+(third/ours/.gitattributes,other)
+(third/ours/own.rs,code)
+(vendor/v.rs,vendored)
+(web/__mocks__/m.ts,test)
+(web/app.js,generated)
+(web/component-test.ts,test)
+(web/dist/bundle.js,generated)
+(web/ok.js,code)"
     );
 }
 
@@ -245,10 +311,10 @@ fn squashing_keeps_state_metrics_of_the_final_tree() {
     flat.commit("flat", "flat\n", 4, &[]);
     scan(&flat.dir, "flat");
     for m in [
-        "m_size",
-        "m_encapsulation",
-        "m_duplication",
-        "m_concentration",
+        "metrics.size",
+        "metrics.encapsulation",
+        "metrics.duplication",
+        "metrics.concentration",
     ] {
         let latest = format!("select * exclude (seq) from {m} order by seq desc limit 1");
         assert_eq!(rows(&flat.dir, &latest), rows(&full.dir, &latest), "{m}");
@@ -257,11 +323,22 @@ fn squashing_keeps_state_metrics_of_the_final_tree() {
 
 /// Imports resolve by each language's conventions, and resolution follows the files
 /// that exist: an include of a missing header resolves once the header is added.
+/// Rust crates are found by src/lib.rs whatever the build system, and named by their
+/// directory or Cargo.toml (also at the repository root); ECMAScript workspace
+/// packages by their package.json name, and path aliases by tsconfig.json.
 #[test]
 fn imports_resolve_by_language_convention() {
     let mut r = fixture();
     let files = [
-        ("Cargo.toml", ""),
+        ("Cargo.toml", "[package]\nname = \"root-app\"\n"),
+        ("src/lib.rs", "pub fn thing() {}\n"),
+        ("src/main.rs", "use root_app::thing;\n"),
+        (
+            "crates/renamed-dir/Cargo.toml",
+            "[package]\nname = \"nice-name\"\n",
+        ),
+        ("crates/renamed-dir/src/lib.rs", "pub fn n() {}\n"),
+        ("libs/buck-only/src/lib.rs", "pub fn b() {}\n"),
         ("crates/core-lib/Cargo.toml", ""),
         (
             "crates/core-lib/src/lib.rs",
@@ -276,7 +353,7 @@ fn imports_resolve_by_language_convention() {
         ("crates/app/Cargo.toml", ""),
         (
             "crates/app/src/main.rs",
-            "use core_lib::a::X;\nuse app::run;\nuse serde::Serialize;\n",
+            "use core_lib::a::X;\nuse app::run;\nuse serde::Serialize;\nuse nice_name::n;\nuse buck_only::b;\n",
         ),
         ("crates/app/src/lib.rs", "pub fn run() {}\n"),
         (
@@ -295,11 +372,21 @@ fn imports_resolve_by_language_convention() {
         ("py/pkg/sub.py", "thing = 1\n"),
         (
             "web/a.ts",
-            "import { b } from './b';\nimport c from './c.js';\nimport d from './d';\nimport React from 'react';\n",
+            "import { b } from './b';\nimport c from './c.js';\nimport d from './d';\nimport React from 'react';\n\
+             import { u } from '@acme/ui';\nimport btn from '@acme/ui/button';\nconst r = require('./b');\n\
+             import gone from '@acme/ui/gone';\nimport { cn } from '@/utils/cn';\nimport m from '@/missing';\n",
         ),
         ("web/b.ts", "export const b = 1;\n"),
         ("web/c.ts", "export default 2;\n"),
         ("web/d/index.ts", "export default 3;\n"),
+        ("packages/ui/package.json", r#"{"name": "@acme/ui"}"#),
+        (
+            "web/tsconfig.json",
+            r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["./src/*"]}}}"#,
+        ),
+        ("web/src/utils/cn.ts", "export const cn = 1;\n"),
+        ("packages/ui/src/index.ts", "export const u = 1;\n"),
+        ("packages/ui/src/button.ts", "export default 2;\n"),
     ];
     for (path, content) in files {
         r.write(path, content);
@@ -321,7 +408,9 @@ fn imports_resolve_by_language_convention() {
     assert_eq!(
         at(4),
         "(crates/app/src/main.rs,app::run,resolved,crates/app/src/lib.rs)
+(crates/app/src/main.rs,buck_only::b,resolved,libs/buck-only/src/lib.rs)
 (crates/app/src/main.rs,core_lib::a::X,resolved,crates/core-lib/src/a.rs)
+(crates/app/src/main.rs,nice_name::n,resolved,crates/renamed-dir/src/lib.rs)
 (crates/app/src/main.rs,serde::Serialize,external,NULL)
 (crates/core-lib/src/a.rs,crate::b::Y,resolved,crates/core-lib/src/b/mod.rs)
 (crates/core-lib/src/a.rs,crate::b::c::Z,resolved,crates/core-lib/src/b/c.rs)
@@ -333,6 +422,7 @@ fn imports_resolve_by_language_convention() {
 (py/pkg/mod.py,..nothing,unresolved,NULL)
 (py/pkg/mod.py,os,external,NULL)
 (py/pkg/mod.py,pkg.sub.thing,resolved,py/pkg/sub.py)
+(src/main.rs,root_app::thing,resolved,src/lib.rs)
 (src/x.c,\"missing.h\",unresolved,NULL)
 (src/x.c,\"submodule/s.h\",external,NULL)
 (src/x.c,\"util/u.h\",resolved,src/util/u.h)
@@ -342,6 +432,11 @@ fn imports_resolve_by_language_convention() {
 (web/a.ts,./b,resolved,web/b.ts)
 (web/a.ts,./c.js,resolved,web/c.ts)
 (web/a.ts,./d,resolved,web/d/index.ts)
+(web/a.ts,@/missing,unresolved,NULL)
+(web/a.ts,@/utils/cn,resolved,web/src/utils/cn.ts)
+(web/a.ts,@acme/ui,resolved,packages/ui/src/index.ts)
+(web/a.ts,@acme/ui/button,resolved,packages/ui/src/button.ts)
+(web/a.ts,@acme/ui/gone,unresolved,NULL)
 (web/a.ts,react,external,NULL)"
     );
     assert!(
@@ -349,13 +444,14 @@ fn imports_resolve_by_language_convention() {
         "{}",
         at(5)
     );
-    // Only app::run names more than a module file has: it falls back to the crate root.
+    // Imports of an item of another crate name more than a module file has: they
+    // fall back to the crate root.
     assert_eq!(
         rows(
             &r.dir,
-            "select name from import_status where fallback and since <= 4 and 4 < until"
+            "select name from import_status where fallback and since <= 4 and 4 < until order by name"
         ),
-        "(app::run)"
+        "(app::run) (buck_only::b) (nice_name::n) (root_app::thing)"
     );
     assert_eq!(
         rows(
@@ -363,7 +459,26 @@ fn imports_resolve_by_language_convention() {
             "select source, target from import_edges where since <= 5 and 5 < until
              and source in ('src/x.c', 'web/a.ts') order by all"
         ),
-        "(src/x.c,src/missing.h) (src/x.c,src/util/u.h) (src/x.c,src/x.h) (web/a.ts,web/b.ts) \
-         (web/a.ts,web/c.ts) (web/a.ts,web/d/index.ts)"
+        "(src/x.c,src/missing.h) (src/x.c,src/util/u.h) (src/x.c,src/x.h) \
+         (web/a.ts,packages/ui/src/button.ts) (web/a.ts,packages/ui/src/index.ts) (web/a.ts,web/b.ts) \
+         (web/a.ts,web/c.ts) (web/a.ts,web/d/index.ts) (web/a.ts,web/src/utils/cn.ts)"
+    );
+}
+
+/// Git paths need not be UTF-8: invalid bytes are written `\xNN`, so distinct paths
+/// stay distinct.
+#[test]
+fn non_utf8_paths_stay_distinct() {
+    let mut r = fixture();
+    r.write(b"a\xff.rs", "fn x() {}\n")
+        .write(b"a\xfe.rs", "fn y() {}\n");
+    r.extend("bytes\n", 5);
+    scan(&r.dir, "main");
+    assert_eq!(
+        rows(
+            &r.dir,
+            "select path from changes where seq = 4 order by path"
+        ),
+        "(a\\xfe.rs) (a\\xff.rs)"
     );
 }

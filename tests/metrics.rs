@@ -14,19 +14,6 @@ fn metric_views() {
     let dir = &r.dir;
     scan(dir, "main");
 
-    // Helper views.
-    assert_eq!(
-        rows(
-            dir,
-            "select seq, subject, is_fix, is_agent, is_bot from commit_info order by seq"
-        ),
-        "(0,c0,false,false,false) (1,c1,false,false,false) (2,c2,false,false,false) (3,merge,false,false,false)"
-    );
-    assert_eq!(
-        rows(dir, "select name, public from fns order by name, tokens"),
-        "(add,false) (add,false) (d,false) (plus,false)"
-    );
-
     // Values checked by hand against the fixture history. The fixture has four
     // commits: shrink the process-metric windows to three code commits. Windows end at
     // each ISO week's last code commit: c2 (Jan 3) and c3 (Jan 5).
@@ -34,79 +21,69 @@ fn metric_views() {
     let cases = [
         // Production tokens and files: a.rs (18), then src/b.rs (18) replaced by src/c.rs, then d.rs (9).
         (
-            "select seq, value, files from m_size",
+            "select seq, value, files from metrics.size",
             "(0,18,1) (1,36,2) (2,36,2) (3,45,3)",
         ),
-        // Both windows hold c1 (a.rs + src/b.rs, crosses modules) and c2 (src/b.rs + src/c.rs,
-        // does not): observed 1/2. Shuffling the labels of their files (one in '', two in
-        // src) crosses for 2 of 3 pairs.
+        // Both windows hold c1 (a.rs and src/b.rs: 1 step apart) and c2 (src/b.rs and
+        // src/c.rs: 0 steps): observed 1/2. The window's files a.rs, src/b.rs, src/c.rs
+        // are 1, 1 and 0 steps apart pairwise: chance gives 2/3.
         (
-            "select seq, value, observed, expected, commits from m_hidden_coupling",
-            "(2,0.7499999999999999,0.5,0.6666666666666667,2) (3,0.7499999999999999,0.5,0.6666666666666667,2)",
+            "select seq, round(value, 4), observed, round(expected, 4), commits from metrics.co_change_distance",
+            "(2,0.75,0.5,0.6667,2) (3,0.75,0.5,0.6667,2)",
         ),
         // Only a.rs at c1 changed again within 7 days (one day after c0).
         (
-            "select seq, value, commits, modifications from m_rework",
+            "select seq, value, commits, modifications from metrics.rework",
             "(2,1.0,1,1) (3,1.0,1,1)",
         ),
         // Window c0..c2: a.rs 1 + 1/2, src/b.rs 1/2 + 1/2, src/c.rs 1/2, so 1 / sum p^2 = 2.5714.
         // Window c1..c3: a.rs 1/2, src/b.rs 1, src/c.rs 1/2, d.rs 1, so 3.6.
         (
-            "select seq, round(value, 4), round(files_per_commit, 4) from m_change_entropy",
+            "select seq, round(value, 4), round(files_per_commit, 4) from metrics.change_entropy",
             "(2,2.5714,1.6667) (3,3.6,1.6667)",
-        ),
-        // Module '' and src carry equal weight in both windows.
-        (
-            "select seq, value, modules from m_module_entropy",
-            "(2,2.0,2) (3,2.0,2)",
         ),
         // No function is pub, so all function tokens are non-public.
         (
-            "select seq, value, by_language from m_encapsulation",
+            "select seq, value, by_language from metrics.encapsulation",
             "(0,1.0,{rust=1.0}) (1,1.0,{rust=1.0}) (2,1.0,{rust=1.0}) (3,1.0,{rust=1.0})",
         ),
         // No function exceeds 200 tokens, none reaches the 50 tokens duplication counts.
         (
-            "select seq, value from m_concentration",
+            "select seq, value from metrics.concentration",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
-        ("select count(*) as seq from m_duplication", "(0)"),
+        ("select count(*) as seq from metrics.duplication", "(0)"),
         // Window c0..c2: a.rs (c0, c1) and src/b.rs (c1, c2) each changed only by t.
         // Window c1..c3: only src/b.rs changes twice.
         (
-            "select seq, value, files from m_ownership",
+            "select seq, value, files from metrics.ownership",
             "(2,1.0,2) (3,1.0,1)",
         ),
         // No branches, conditions, globals, throws or goto; each function is its body block.
         (
-            "select seq, value, deep_share from m_nesting",
+            "select seq, value, deep_share from metrics.nesting",
             "(0,0.0,0.0) (1,0.0,0.0) (2,0.0,0.0) (3,0.0,0.0)",
         ),
         (
-            "select seq, value from m_decisions",
+            "select seq, value from metrics.decisions",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
         (
-            "select seq, value from m_global_state",
+            "select seq, value from metrics.global_state",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
         (
-            "select seq, value from m_exceptions",
+            "select seq, value from metrics.exceptions",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
-        ("select count(*) as seq from m_goto", "(0)"),
+        ("select count(*) as seq from metrics.goto", "(0)"),
         // Rust files without imports: no import graph, every file reaches nothing.
-        ("select count(*) as seq from m_import_coverage", "(0)"),
-        ("select count(*) as seq from m_cross_module_imports", "(0)"),
-        // No file reaches another; with one file (c0) there is no other file to reach.
+        ("select count(*) as seq from metrics.import_coverage", "(0)"),
+        ("select count(*) as seq from metrics.import_distance", "(0)"),
+        // Read at each week's last commit (c2, then c3): no file reaches another.
         (
-            "select seq, value, mean_reach, median_reach, largest_cycle, files, rust from m_dependency_reach",
-            "(1,0.0,0.0,0.0,1,2,0.0) (2,0.0,0.0,0.0,1,2,0.0) (3,0.0,0.0,0.0,1,3,0.0)",
-        ),
-        // Every changed file reaches nothing, as does every other: the middle percentile.
-        (
-            "select seq, value, reach from m_changed_file_reach",
-            "(2,0.5,0.0) (3,0.5,0.0)",
+            "select seq, value, mean_reach, median_reach, largest_cycle, files, rust from metrics.dependency_reach",
+            "(2,0.0,0.0,0,1,2,0.0) (3,0.0,0.0,0,1,3,0.0)",
         ),
     ];
     for (query, expected) in cases {
@@ -120,29 +97,35 @@ fn metric_views() {
     // Every metric view has the columns the export and the dashboard rely on.
     let metrics = rows(
         dir,
-        "select view_name from duckdb_views() where starts_with(view_name, 'm_')",
+        "select view_name from duckdb_views() where schema_name = 'metrics'",
     );
     for m in metrics.split(' ').map(|m| m.trim_matches(['(', ')'])) {
         let has = rows(
             dir,
-            &format!("select count(*) from (describe {m}) where column_name in ('seq', 'value')"),
+            &format!(
+                "select count(*) from (describe metrics.{m}) where column_name in ('seq', 'value')"
+            ),
         );
         assert_eq!(has, "(2)", "{m} lacks seq or value");
     }
 }
 
+/// The JSON export, and what `metrics` refuses: a missing or empty database, an
+/// output that names a metric, unknown metrics. It reads a read-only database and
+/// ignores views a user added.
 #[test]
-fn metrics_json() {
-    let r = fixture();
-    let dir = &r.dir;
-    scan(dir, "main");
-    let out = tally(dir, &["metrics", "-", "m_hidden_coupling", "m_size"]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let size = [("01", 18, 1), ("02", 36, 2), ("03", 36, 2), ("05", 45, 3)]
+fn export() {
+    {
+        let r = fixture();
+        let dir = &r.dir;
+        scan(dir, "main");
+        let out = tally(dir, &["metrics", "-", "co_change_distance", "size"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let size = [("01", 18, 1), ("02", 36, 2), ("03", 36, 2), ("05", 45, 3)]
         .iter()
         .enumerate()
         .map(|(i, (day, tokens, files))| {
@@ -152,58 +135,100 @@ fn metrics_json() {
         })
         .collect::<Vec<_>>()
         .join(",");
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        format!(r#"{{"m_hidden_coupling":[],"m_size":[{size}]}}"#) + "\n"
-    );
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            format!(r#"{{"co_change_distance":[],"size":[{size}]}}"#) + "\n"
+        );
 
-    // All metrics by default, in definition order; empty ones as [].
-    let all = String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap();
-    assert!(
-        all.starts_with(r#"{"m_size":["#)
-            && all.contains(r#""m_duplication":[]"#)
-            && all.contains(r#""by_language":{"rust":1.0}"#),
-        "{all}"
-    );
+        // All metrics by default, in definition order; empty ones as [].
+        let all = String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap();
+        assert!(
+            all.starts_with(r#"{"size":["#)
+                && all.contains(r#""duplication":[]"#)
+                && all.contains(r#""by_language":{"rust":1.0}"#),
+            "{all}"
+        );
 
-    // A file output holds the same document; the partial file is renamed away.
-    let path = dir.path().join("metrics.json");
-    let out = tally(dir, &["metrics", path.to_str().unwrap()]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), all);
-    assert!(!dir.path().join("metrics.partial").exists());
+        // A file output holds the same document; the partial file is renamed away.
+        let path = dir.path().join("metrics.json");
+        let out = tally(dir, &["metrics", path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), all);
+        assert!(!dir.path().join("metrics.partial").exists());
 
-    // A metric removed from metrics.sql disappears from a database an older tally,
-    // with other SQL, opened.
-    execute(
-        dir,
-        "create view m_removed as select 0 as seq, 1 as value;
+        // A metric removed from tally's SQL disappears from a database an older tally,
+        // with other SQL, opened.
+        execute(
+            dir,
+            "create view metrics.removed as select 0 as seq, 1 as value;
          create or replace macro tally_sql() as 'older'",
-    );
-    assert_eq!(
-        String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap(),
-        all
-    );
+        );
+        assert_eq!(
+            String::from_utf8(tally(dir, &["metrics", "-"]).stdout).unwrap(),
+            all
+        );
 
-    // Forgetting the output argument does not silently write a file named after a metric.
-    let out = tally(dir, &["metrics", "m_size"]);
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        !out.status.success() && err.contains("is a metric"),
-        "{err}"
-    );
-    assert!(!dir.path().join("m_size").exists());
+        // Forgetting the output argument does not silently write a file named after a metric.
+        let out = tally(dir, &["metrics", "size"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("is a metric"),
+            "{err}"
+        );
+        assert!(!dir.path().join("size").exists());
 
-    let out = tally(dir, &["metrics", "-", "nope"]);
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        !out.status.success() && err.contains("invalid value 'nope'"),
-        "{err}"
-    );
+        let out = tally(dir, &["metrics", "-", "nope"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("invalid value 'nope'"),
+            "{err}"
+        );
+    }
+    {
+        let r = fixture();
+        let out = tally(&r.dir, &["metrics", "-"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("no database at"),
+            "{err}"
+        );
+        assert!(!common::db(&r.dir).exists());
+
+        execute(&r.dir, include_str!("../sql/schema.sql"));
+        let out = tally(&r.dir, &["metrics", "-"]);
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !out.status.success() && err.contains("has no commits yet"),
+            "{err}"
+        );
+
+        scan(&r.dir, "main");
+        execute(
+            &r.dir,
+            "create view metrics.mine as select 0 as seq, 1 as value; create view \"my view\" as select 1",
+        );
+        let db = common::db(&r.dir);
+        let mut perms = std::fs::metadata(&db).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&db, perms).unwrap();
+        let out = tally(&r.dir, &["metrics", "-", "size", "size"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .matches("\"size\"")
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -214,7 +239,8 @@ fn dashboard_matches_metrics() {
         "select unnest(json_extract(json, '$.panels[*]')) as p from read_json_objects('{}')",
         dashboard.display()
     );
-    // Each metric view has one single-target panel, described by the view's comment.
+    // Each metric view has one single-target panel, described by the view's comment
+    // after its `CATEGORY: Title` line.
     let mismatched = rows(
         &dir,
         &format!(
@@ -222,9 +248,10 @@ fn dashboard_matches_metrics() {
              single as (select p ->> '$.targets[0].root_selector' as selector, p ->> '$.description' as description
                         from p where json_array_length(p -> '$.targets') = 1)
              select v.view_name from duckdb_views() v
-             where starts_with(v.view_name, 'm_')
+             where v.schema_name = 'metrics'
                and (select count(*) from single s
-                    where s.selector = '$.' || v.view_name and s.description = v.comment) <> 1"
+                    where s.selector = '$.' || v.view_name
+                      and s.description = regexp_replace(v.comment, '^[^\n]*\n\n', '')) <> 1"
         ),
     );
     assert_eq!(
@@ -249,14 +276,34 @@ fn mean_value(dir: &TempDir, metric: &str) -> f64 {
         .unwrap()
 }
 
-/// Shuffled module labels give a lift of 1: when co-change is independent of modules,
-/// the chance level is exactly what is observed, at few and many modules.
+/// When co-change and imports are independent of where files live, observed
+/// distances equal their chance level: a lift of 1, over few and many directories,
+/// and when a few hubs take all the imports.
 #[test]
-fn hidden_coupling_lift_is_one_under_the_null() {
-    for (modules, files) in [(5, 40), (50, 200), (200, 800)] {
-        let dir = facts(&random_history(0, 3000, modules, files, 3));
-        let lift = mean_value(&dir, "m_hidden_coupling");
-        assert!((lift - 1.0).abs() < 0.02, "{modules} modules: lift {lift}");
+fn lifts_are_one_under_the_null() {
+    {
+        for (modules, files) in [(5, 40), (50, 200), (200, 800)] {
+            let dir = facts(&random_history(0, 3000, modules, files, 3));
+            let lift = mean_value(&dir, "metrics.co_change_distance");
+            assert!((lift - 1.0).abs() < 0.02, "{modules} modules: lift {lift}");
+        }
+    }
+    {
+        for (modules, targets) in [(5, 600), (50, 600), (50, 5)] {
+            let dir = facts(&random_imports(modules, 600, targets, 4));
+            assert_eq!(
+                rows(
+                    &dir,
+                    "select class, count(*) from import_status group by all"
+                ),
+                "(resolved,2400)"
+            );
+            let lift = mean_value(&dir, "metrics.import_distance");
+            assert!(
+                (lift - 1.0).abs() < 0.03,
+                "{modules} modules, {targets} targets: lift {lift}"
+            );
+        }
     }
 }
 
@@ -269,10 +316,9 @@ fn inert_commits_leave_past_windows_unchanged() {
     // Rounded: parallel sums may differ in the last bits.
     let windows = |d: &TempDir| {
         [
-            "m_hidden_coupling",
-            "m_rework",
-            "m_change_entropy",
-            "m_module_entropy",
+            "metrics.co_change_distance",
+            "metrics.rework",
+            "metrics.change_entropy",
         ]
         .map(|m| {
             rows(
@@ -287,8 +333,8 @@ fn inert_commits_leave_past_windows_unchanged() {
         "insert into commits values
            (300, 'bulk', timestamp '2026-01-01' + to_days(320), 't <t@t>', 'bulk'),
            (301, 'lone', timestamp '2026-01-01' + to_days(321), 't <t@t>', 'lone');
-         insert into changes select 300, 'bulk/b' || i || '.rs', 'bulk' || i from range(40) r(i);
-         insert into changes values (301, 'lone/x.rs', 'lone');
+         insert into changes (seq, path, blob) select 300, 'bulk/b' || i || '.rs', 'bulk' || i from range(40) r(i);
+         insert into changes (seq, path, blob) values (301, 'lone/x.rs', 'lone');
          insert into spans (blob, v, lang, kind, line, tokens)
            select blob, 3, 'rust', 'file', 1, 1 from changes where seq >= 300;",
     );
@@ -307,10 +353,10 @@ fn renaming_identifiers_changes_no_structural_metric() {
     let renamed = fixture_named("sum_of", "total", "delta");
     scan(&renamed.dir, "main");
     for m in [
-        "m_size",
-        "m_encapsulation",
-        "m_duplication",
-        "m_concentration",
+        "metrics.size",
+        "metrics.encapsulation",
+        "metrics.duplication",
+        "metrics.concentration",
     ] {
         let q = format!("select * from {m} order by seq");
         assert_eq!(rows(&renamed.dir, &q), rows(&original.dir, &q), "{m}");
@@ -373,7 +419,7 @@ fn blob_facts_count_structure() {
     assert_eq!(facts("x.c"), "(8,2,1,1,2.0,0)");
 }
 
-/// `code_totals` and `m_duplication`, built from change points, equal computing them
+/// `code_totals` and `duplication`, built from change points, equal computing them
 /// from the live files commit by commit, through additions, a modification that
 /// breaks a structural twin, a deletion and a rename.
 #[test]
@@ -412,7 +458,10 @@ fn change_points_match_per_commit_sums() {
          select seq, coalesce(sum(t) filter (n > 1), 0) / sum(t) from g group by seq order by seq";
     let duplication = rows(&r.dir, naive_duplication);
     assert_eq!(
-        rows(&r.dir, "select seq, value from m_duplication order by seq"),
+        rows(
+            &r.dir,
+            "select seq, value from metrics.duplication order by seq"
+        ),
         duplication
     );
     assert!(
@@ -433,34 +482,13 @@ fn change_points_match_per_commit_sums() {
 fn random_imports(modules: u32, files: u32, targets: u32, per_file: u32) -> String {
     format!(
         "insert into commits values (0, 'c0', timestamp '2026-01-01', 't <t@t>', 'init');
-         insert into changes select 0, 'm' || (f % {modules}) || '/f' || f || '.py', 'b' || f from range({files}) g(f);
+         insert into changes (seq, path, blob) select 0, 'm' || (f % {modules}) || '/f' || f || '.py', 'b' || f from range({files}) g(f);
          insert into spans (blob, v, lang, kind, line, tokens) select 'b' || f, 6, 'python', 'file', 1, 1 from range({files}) g(f);
          insert into spans (blob, v, lang, kind, name, line, start_byte, end_byte)
            select 'b' || f, 6, 'python', 'import', 'f' || t, 1, t, t + 1
            from range({files}) a(f), range({targets}) b(t) where f <> t
            qualify row_number() over (partition by f order by md5(f || ':' || t)) <= {per_file};"
     )
-}
-
-/// Rewiring imports at random, keeping how much each module imports and is
-/// imported, gives a lift of 1: also when a few hubs take all the imports.
-#[test]
-fn import_coupling_lift_is_one_under_the_null() {
-    for (modules, targets) in [(5, 600), (50, 600), (50, 5)] {
-        let dir = facts(&random_imports(modules, 600, targets, 4));
-        assert_eq!(
-            rows(
-                &dir,
-                "select class, count(*) from import_status group by all"
-            ),
-            "(resolved,2400)"
-        );
-        let lift = mean_value(&dir, "m_cross_module_imports");
-        assert!(
-            (lift - 1.0).abs() < 0.03,
-            "{modules} modules, {targets} targets: lift {lift}"
-        );
-    }
 }
 
 /// The dependency metrics on a small Python graph, checked by hand: a/x imports a/y,
@@ -483,31 +511,26 @@ fn dependency_metrics_by_hand() {
     r.write("a/x.py", x(2)).write("b/w.py", w(1));
     r.extend("x and w\n", 3);
     scan(&r.dir, "main");
-    // `metrics` rebuilds the cones that m_dependency_reach and m_changed_file_reach read.
+    // `metrics` rebuilds the cones that dependency_reach reads.
     assert!(tally(&r.dir, &["metrics", "-"]).status.success());
     // One window: the week's last commit, over the last three code commits.
     execute(&r.dir, "create or replace macro window_commits() as 3");
     let cases = [
         (
-            "select seq, value, fallback_share, imports, python from m_import_coverage where seq = 3",
+            "select seq, value, fallback_share, imports, python from metrics.import_coverage where seq = 3",
             "(3,1.0,0.0,3,1.0)",
         ),
-        // Edges x->y (a to a), y->z (a to b), z->y (b to a): 2 of 3 cross. a imports twice
-        // and is imported twice, b once each: 5 of 9 rewired edges stay inside, 4/9 cross.
+        // Edges x->y (0 steps), y->z and z->y (2 steps each): observed 4/3. Rewired at
+        // random: importers and imported files sit 1 deep (2 steps on average apart), less
+        // twice the stubs that share a directory, (a: 2 out x 2 in, b: 1 x 1) / 9: 8/9.
         (
-            "select seq, round(value, 4), edges, round(python, 4) from m_cross_module_imports where seq = 3",
+            "select seq, round(value, 4), edges, round(python, 4) from metrics.import_distance where seq = 3",
             "(3,1.5,3,1.5)",
         ),
         // Cones: x 2, y 1, z 1, w 0 of 3 others: (2 + 1 + 1 + 0) / 3 / 4.
         (
-            "select seq, round(value, 4), mean_reach, median_reach, largest_cycle, files from m_dependency_reach where seq = 3",
-            "(3,0.3333,1.0,1.0,2,4)",
-        ),
-        // Cone percentiles among the 4 files, ties counting half: x 3.5/4, y and z
-        // 2/4, w 0.5/4. Commits: x (0.875, reach 2), y and z (0.5, 1), x and w (0.5, 1).
-        (
-            "select seq, value, round(reach, 4), commits from m_changed_file_reach",
-            "(3,0.625,1.3333,3)",
+            "select seq, round(value, 4), mean_reach, median_reach, largest_cycle, files from metrics.dependency_reach where seq = 3",
+            "(3,0.3333,1.0,1,2,4)",
         ),
     ];
     for (query, expected) in cases {
@@ -515,23 +538,101 @@ fn dependency_metrics_by_hand() {
     }
 }
 
-/// `family`, by extension in SQL, agrees with the extensions of `LANGS`.
+/// The SQL matches the languages: `family()` agrees with `LANGS`, every family has
+/// every per-family rule, and every span kind the SQL reads is one a query captures.
 #[test]
-fn families_match_languages() {
-    let dir = facts("");
-    for lang in tally::LANGS {
-        let expected = match lang.name {
-            "c" | "cpp" => "c",
-            "typescript" | "tsx" | "javascript" => "ecma",
-            other => other,
-        };
-        for ext in lang.exts {
+fn sql_covers_every_language() {
+    {
+        let dir = facts("");
+        for lang in tally::LANGS {
+            let expected = match lang.name {
+                "c" | "cpp" => "c",
+                "typescript" | "tsx" | "javascript" => "ecma",
+                other => other,
+            };
+            for ext in lang.exts {
+                assert_eq!(
+                    rows(&dir, &format!("select family('a/b.{ext}')")),
+                    format!("({expected})"),
+                    "{ext}"
+                );
+            }
+        }
+        assert_eq!(rows(&dir, "select family('a/b.md')"), "(NULL)");
+    }
+    {
+        let dir = facts("");
+        let sql = tally::SQL;
+        let families = rows(
+            &dir,
+            &format!(
+                "select distinct family('x.' || ext) from unnest([{}]) t(ext) order by 1",
+                tally::LANGS
+                    .iter()
+                    .flat_map(|l| l.exts)
+                    .map(|e| format!("'{e}'"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        );
+        for family in families.split(' ').map(|f| f.trim_matches(['(', ')'])) {
+            for rule in [
+                format!("when '{family}' then"),
+                format!("where family(path) = '{family}'"),
+            ] {
+                assert!(sql.contains(rule.as_str()), "tally's SQL lacks `{rule}`");
+            }
+            let column = format!("family = '{family}') as {family}");
             assert_eq!(
-                rows(&dir, &format!("select family('a/b.{ext}')")),
-                format!("({expected})"),
-                "{ext}"
+                sql.matches(column.as_str()).count(),
+                3,
+                "every dependency metric needs the column {family}"
             );
         }
     }
-    assert_eq!(rows(&dir, "select family('a/b.md')"), "(NULL)");
+    {
+        let sql = tally::SQL;
+        let mut kinds = Vec::new();
+        for (i, _) in sql.match_indices("kind ") {
+            let rest = &sql[i + 5..];
+            let literals = if let Some(r) = rest.strip_prefix("= ") {
+                &r[..r
+                    .find(|c: char| c != '\'' && !c.is_ascii_lowercase() && c != '_')
+                    .unwrap()]
+            } else if let Some(r) = rest.strip_prefix("in (") {
+                &r[..r.find(')').unwrap()]
+            } else {
+                continue;
+            };
+            kinds.extend(literals.split('\'').filter(|k| {
+                k.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !k.is_empty()
+            }));
+        }
+        assert!(kinds.len() > 10, "{kinds:?}");
+        for kind in kinds {
+            assert!(
+                kind == "file" || tally::KINDS.contains(&kind),
+                "the SQL reads span kind {kind:?}, which no query captures"
+            );
+        }
+    }
+}
+
+/// A lone wrong clock (a commit dated 1970 or 2999 among its neighbours) takes its
+/// neighbours' time, and times never fall back.
+#[test]
+fn commit_times_drop_a_lone_wrong_clock() {
+    let dir = facts(
+        "insert into commits values
+           (0, 'a', timestamp '2026-01-01', 't', 'x'), (1, 'b', timestamp '1970-01-01', 't', 'x'),
+           (2, 'c', timestamp '2026-01-03', 't', 'x'), (3, 'd', timestamp '2999-01-01', 't', 'x'),
+           (4, 'e', timestamp '2026-01-05', 't', 'x'), (5, 'f', timestamp '2026-01-04', 't', 'x')",
+    );
+    assert_eq!(
+        rows(
+            &dir,
+            "select seq, time::date from commit_times order by seq"
+        ),
+        "(0,2026-01-01) (1,2026-01-01) (2,2026-01-03) (3,2026-01-05) (4,2026-01-05) (5,2026-01-05)"
+    );
 }

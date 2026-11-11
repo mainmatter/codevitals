@@ -6,6 +6,8 @@
 (variable_declarator name: (identifier) @name value: (function_expression parameters: (formal_parameters) @params)) @fn
 (comment) @comment
 [(import_statement source: (string)) (export_statement source: (string))] @import
+(call_expression function: (identifier) @_require (#eq? @_require "require") arguments: (arguments . (string))) @import
+(call_expression function: (import) arguments: (arguments . (string))) @import
 (call_expression function: [(identifier) @name (member_expression property: (property_identifier) @name)]) @call
 (export_statement declaration: (function_declaration) @pub)
 (export_statement declaration: (generator_function_declaration) @pub)

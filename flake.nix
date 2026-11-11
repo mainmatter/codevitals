@@ -38,6 +38,29 @@
         );
     in
     {
+      # `nix run github:mainmatter/tally -- scan`: the CLI, built with the pinned toolchain.
+      packages = forAllSystems (
+        pkgs:
+        let
+          rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in
+        {
+          default = rustPlatform.buildRustPackage {
+            pname = "tally";
+            version = (lib.importTOML ./Cargo.toml).package.version;
+            src = lib.cleanSource ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+            # The tests need git and take minutes in a sandbox; CI runs them with cargo.
+            doCheck = false;
+            meta.mainProgram = "tally";
+          };
+        }
+      );
+
       devShells = forAllSystems (
         pkgs:
         let

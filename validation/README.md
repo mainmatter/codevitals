@@ -1,7 +1,7 @@
 # Labelling `is_fix`
 
 `is_fix_sample.csv` holds 150 RediSearch commits for checking the `is_fix`
-keyword rule (`commit_info.is_fix` in `src/metrics.sql`) before any metric is
+keyword rule (`is_fix` in `commit_info.sql`, a view to apply to a scanned database) before any metric is
 validated against it.
 
 | Stratum | Commits | Measures |

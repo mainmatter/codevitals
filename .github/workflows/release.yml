@@ -1,0 +1,31 @@
+# Push a tag (git tag v0.2.0 && git push --tags) to publish a release with a binary
+# per runner the tally action supports, named tally-<runner.os>-<runner.arch>.tar.gz.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
+  binaries:
+    needs: release
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo build --release --locked
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="tally-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz"
+          tar -czf "$asset" -C target/release tally
+          gh release upload "$GITHUB_REF_NAME" "$asset" --repo "$GITHUB_REPOSITORY"

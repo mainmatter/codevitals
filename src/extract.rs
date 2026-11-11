@@ -3,92 +3,11 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::sync::OnceLock;
 
-use tree_sitter::{Language, Node, Parser, Point, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Parser, Point, QueryCursor, StreamingIterator};
 use xxhash_rust::xxh3::xxh3_64;
 
-/// A language: a name, the extensions that select it, a grammar and a query file.
-#[derive(Clone, Copy)]
-pub struct Lang {
-    pub name: &'static str,
-    pub exts: &'static [&'static str],
-    grammar: fn() -> Language,
-    query: &'static str,
-}
-
-pub const LANGS: &[Lang] = &[
-    Lang {
-        name: "rust",
-        exts: &["rs"],
-        grammar: || tree_sitter_rust::LANGUAGE.into(),
-        query: include_str!("../langs/rust.scm"),
-    },
-    Lang {
-        name: "c",
-        exts: &["c"],
-        grammar: || tree_sitter_c::LANGUAGE.into(),
-        query: include_str!("../langs/c.scm"),
-    },
-    Lang {
-        name: "cpp",
-        exts: &["h", "cc", "cpp", "cxx", "hh", "hpp", "hxx"],
-        grammar: || tree_sitter_cpp::LANGUAGE.into(),
-        query: include_str!("../langs/cpp.scm"),
-    },
-    Lang {
-        name: "python",
-        exts: &["py"],
-        grammar: || tree_sitter_python::LANGUAGE.into(),
-        query: include_str!("../langs/python.scm"),
-    },
-    Lang {
-        name: "typescript",
-        exts: &["ts", "mts", "cts"],
-        grammar: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-    Lang {
-        name: "tsx",
-        exts: &["tsx"],
-        grammar: || tree_sitter_typescript::LANGUAGE_TSX.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-    Lang {
-        name: "javascript",
-        exts: &["js", "mjs", "cjs", "jsx"],
-        grammar: || tree_sitter_javascript::LANGUAGE.into(),
-        query: include_str!("../langs/ecma.scm"),
-    },
-];
-
-impl Lang {
-    /// The language selected by the lowercased extension of `path`.
-    pub fn of(path: &str) -> Option<Lang> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-        LANGS
-            .iter()
-            .copied()
-            .find(|l| l.exts.contains(&ext.as_str()))
-    }
-
-    /// The compiled query, memoized: compiling costs up to 13 ms (C++), far more
-    /// than parsing a typical file. It depends only on `LANGS`, so `extract` stays pure.
-    fn compiled_query(self) -> &'static Query {
-        static QUERIES: OnceLock<Vec<Query>> = OnceLock::new();
-        let queries = QUERIES.get_or_init(|| {
-            let compile = |l: &Lang| Query::new(&(l.grammar)(), l.query).expect("query compiles");
-            LANGS.iter().map(compile).collect()
-        });
-        &queries[LANGS
-            .iter()
-            .position(|l| l.name == self.name)
-            .expect("lang is in LANGS")]
-    }
-}
+use crate::Lang;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -308,6 +227,13 @@ fn import_targets(node: Node, text: &impl Fn(Node) -> String) -> Vec<String> {
             out
         }
         "preproc_include" => vec![text(field("path").expect("include has a path"))],
+        // require('x') and import('x'): the first argument, when it is a string.
+        "call_expression" => field("arguments")
+            .and_then(|args| args.named_child(0))
+            .filter(|arg| arg.kind() == "string")
+            .map(|arg| text(arg).trim_matches(['"', '\'', '`']).to_owned())
+            .into_iter()
+            .collect(),
         "import_statement" | "export_statement" => match field("source") {
             Some(source) => vec![text(source).trim_matches(['"', '\'', '`']).to_owned()],
             None => names.into_iter().map(python_name).collect(),
