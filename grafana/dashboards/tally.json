@@ -29,161 +29,46 @@
   "panels": [
     {
       "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**How to read this dashboard.** Charts count production code only, not tests, vendored or non-code files. Hover a title for what a chart measures and how to read it.\nChange and entropy charts use the last 100 commits that touched code, read weekly; neighbouring points share most commits, and faint lines span two standard errors. A dashed line at 1 marks chance: module boundaries make no difference.\nDependency charts draw one line per language. A file's *reach* is the files it depends on through its imports and theirs.\nNo metric is validated against defects yet: read trends within this repository, not absolute values."
+      }
+    },
+    {
+      "id": 2,
       "type": "row",
-      "title": "Read together",
+      "title": "Size",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "panels": []
     },
     {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Fake modularity",
-      "description": "Sprawl improves while locality and hidden coupling do not: the directories exist, but the dependencies ignore them.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 1
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_sprawl",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "sprawl ↓",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_locality",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "locality ↑",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_hidden_coupling",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "hidden coupling ↓",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
       "id": 3,
       "type": "timeseries",
-      "title": "Splitting without simplifying",
-      "description": "Concentration improves while interface bloat worsens (right axis).",
+      "title": "Production code size",
+      "description": "SIZE. What: production code at each commit, in tokens (value) and files; tests, vendored and non-code files excluded.\n\nRead: context, not a score. A step marks a bulk commit, which often moves other charts too.\n\nTrend: size is the strongest single predictor of defects: judge the other trends against it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "tally-infinity"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 1
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 5
       },
       "targets": [
         {
@@ -200,7 +85,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_concentration",
+          "root_selector": "$.m_size",
           "format": "timeseries",
           "columns": [
             {
@@ -210,36 +95,12 @@
             },
             {
               "selector": "value",
-              "text": "concentration ↓",
+              "text": "Production code size",
               "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_interface_bloat",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
             },
             {
-              "selector": "value",
-              "text": "interface bloat ↓",
+              "selector": "files",
+              "text": "files",
               "type": "number"
             }
           ]
@@ -247,12 +108,12 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "short",
           "decimals": 2,
           "custom": {
             "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
+            "lineWidth": 2,
+            "spanNulls": false,
             "showPoints": "never",
             "fillOpacity": 0
           }
@@ -261,16 +122,38 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "interface bloat ↓"
+              "options": "Production code size"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "none"
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
               },
               {
                 "id": "custom.axisPlacement",
                 "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           }
@@ -290,51 +173,35 @@
     },
     {
       "id": 4,
+      "type": "row",
+      "title": "How changes spread",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "panels": []
+    },
+    {
+      "id": 5,
       "type": "timeseries",
-      "title": "Entanglement creep",
-      "description": "Call coupling or hidden coupling rises while encapsulation falls.",
+      "title": "Commits crossing modules (vs chance) ↓",
+      "description": "CHANGES. What: how often files changed in the same commit sit in different modules, relative to chance, over the last 100 code commits each week. Lower is better.\n\nRead: 1 means module boundaries make no difference to what changes together; below 1, modules change independently. Dashed lines span two standard errors.\n\nTrend: rising means modules must change together more, through coupling no import shows. Change coupling correlates with defects.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "tally-infinity"
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
-        "x": 16,
-        "y": 1
+        "x": 0,
+        "y": 15
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_call_coupling",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "call coupling ↓",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "B",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
             "uid": "tally-infinity"
@@ -357,36 +224,17 @@
             },
             {
               "selector": "value",
-              "text": "hidden coupling ↓",
+              "text": "Commits crossing modules (vs chance)",
               "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_encapsulation",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
             },
             {
-              "selector": "value",
-              "text": "encapsulation ↑",
+              "selector": "low",
+              "text": "-2 standard errors",
+              "type": "number"
+            },
+            {
+              "selector": "high",
+              "text": "+2 standard errors",
               "type": "number"
             }
           ]
@@ -394,17 +242,99 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "none",
           "decimals": 2,
           "custom": {
             "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
+            "lineWidth": 2,
+            "spanNulls": false,
             "showPoints": "never",
-            "fillOpacity": 0
+            "fillOpacity": 0,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 1
+              }
+            ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Commits crossing modules (vs chance)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -419,758 +349,19 @@
       }
     },
     {
-      "id": 5,
-      "type": "row",
-      "title": "Coherence",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 9
-      },
-      "panels": []
-    },
-    {
       "id": 6,
       "type": "timeseries",
-      "title": "locality ↑",
-      "description": "COHERENCE. Share of the last 50 commits whose changes stay inside one module (directory depth 2). Higher is better. Low or falling values mean a typical change cuts across module boundaries: the boundaries no longer match how the code changes. Evidence: the variable encapsulation metrics were validated against; follow-on patch size predicted agent failure. Gaming: splitting one change into several single-module commits; measure per merged PR.",
+      "title": "Rework within 7 days ↓",
+      "description": "CHANGES. What: the share of edits to files already changed in the previous 7 days, over the last 100 code commits each week. Lower is better.\n\nRead: 0.2 means a fifth of a typical commit's edits rework last week's code. Expect high values during feature work.\n\nTrend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "tally-infinity"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 10
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_locality",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "locality",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 7,
-      "type": "timeseries",
-      "title": "scatter ↓",
-      "description": "COHERENCE. Normalized Shannon entropy of changes across files per 50-commit window; 0 = all changes hit one file, 1 = spread evenly over every touched file. Lower is better. High values mean work is diffuse and hard to keep in your head. Evidence: change entropy predicted faults better than prior changes or prior faults in six open-source projects.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 8,
-        "y": 10
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_scatter",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "scatter",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 8,
-      "type": "row",
-      "title": "Entanglement",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 18
-      },
-      "panels": []
-    },
-    {
-      "id": 9,
-      "type": "timeseries",
-      "title": "hidden coupling ↓",
-      "description": "ENTANGLEMENT. Of all file pairs that changed in the same commit (commits with 2-30 files, per 100-commit window), the share whose files live in different modules. Lower is better. High values reveal dependencies that no import shows: files in separate modules that cannot change independently. Evidence: change coupling correlates with defects.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 19
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_hidden_coupling",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "hidden coupling",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 10,
-      "type": "timeseries",
-      "title": "call coupling ↓",
-      "description": "ENTANGLEMENT. At every 50th commit and the latest: of resolved calls between different files, the share that crosses a module boundary. Lower is better. mutual_module_pairs counts module pairs that call each other in both directions: a cheap proxy for dependency cycles; should be zero. Heuristic: only calls with a repository-unique name resolve (see resolution_rate). Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 19
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_call_coupling",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "call coupling",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 11,
-      "type": "row",
-      "title": "Boundaries",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 27
-      },
-      "panels": []
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "encapsulation ↑",
-      "description": "BOUNDARIES. Share of function tokens that sit in non-public functions. Higher is better: more of the code is hidden behind a smaller public surface. Falling values mean the API surface is growing faster than the implementation. A syntactic approximation of the internal-code share that correlated with local change. Unvalidated in this form.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 28
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_encapsulation",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "encapsulation",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 13,
-      "type": "row",
-      "title": "Complicatedness",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 36
-      },
-      "panels": []
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "duplication ↓",
-      "description": "COMPLICATEDNESS. Share of function tokens (functions of 50+ tokens) whose structure occurs more than once at that commit, ignoring names and literal values. Lower is better. Rising values mean copy-paste instead of reuse. Whole-function clones only. Gaming: trivial structural edits to a copy.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 37
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_duplication",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "duplication",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 15,
-      "type": "timeseries",
-      "title": "interface bloat ↓",
-      "description": "COMPLICATEDNESS. Parameters per 100 function tokens. Lower is better. Rising values, together with rising share_tiny (functions under 20 tokens) and a falling fn_tokens_median, mean complexity is moving out of function bodies into parameter lists: splitting without simplifying. share_wide is the share of functions with 5+ parameters. Evidence: field observation only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 37
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_interface_bloat",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "interface bloat",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 16,
-      "type": "row",
-      "title": "Complexity",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 45
-      },
-      "panels": []
-    },
-    {
-      "id": 17,
-      "type": "timeseries",
-      "title": "concentration ↓",
-      "description": "COMPLEXITY. Share of all function tokens that sits in functions larger than 200 tokens. Lower is better. High values mean logic piles up in a few large functions. Read together with m_interface_bloat: driving this down by mechanical splitting shows up there. Token counts ignore whitespace, comments and identifier length.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 46
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_concentration",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "concentration",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 18,
-      "type": "row",
-      "title": "Organization",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 54
-      },
-      "panels": []
-    },
-    {
-      "id": 19,
-      "type": "timeseries",
-      "title": "sprawl ↓",
-      "description": "ORGANIZATION. Share of all files that sits in the single largest directory. Lower is better. High values mean a flat pile of files instead of modules. files_per_dir_p90 shows how full directories get. Gaming: creating directories that do not reflect dependencies; cross-check with m_locality and m_hidden_coupling.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 55
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "tally-infinity"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.m_sprawl",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "sprawl",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "type": "row",
-      "title": "Stability",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 63
-      },
-      "panels": []
-    },
-    {
-      "id": 21,
-      "type": "timeseries",
-      "title": "rework ↓",
-      "description": "STABILITY. Share of file modifications that hit a file changed within the previous 5 commits (within_20: previous 20). Lower is better once a feature has landed. High values mean code does not settle: it is rewritten soon after it is written. Unvalidated; expect high values during active feature work.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "tally-infinity"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 64
+        "y": 15
       },
       "targets": [
         {
@@ -1197,7 +388,17 @@
             },
             {
               "selector": "value",
-              "text": "rework",
+              "text": "Rework within 7 days",
+              "type": "number"
+            },
+            {
+              "selector": "low",
+              "text": "-2 standard errors",
+              "type": "number"
+            },
+            {
+              "selector": "high",
+              "text": "+2 standard errors",
               "type": "number"
             }
           ]
@@ -1209,13 +410,1251 @@
           "decimals": 2,
           "custom": {
             "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
+            "lineWidth": 2,
+            "spanNulls": false,
             "showPoints": "never",
             "fillOpacity": 0
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rework within 7 days"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "File ownership by top author ↑",
+      "description": "CHANGES. What: for files changed at least twice in the last 100 code commits, the share of changes made by their most active author, each week. Higher is better.\n\nRead: 0.8 means a typical file's main author made 80% of its changes. Dashed lines span two standard errors.\n\nTrend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_ownership",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "File ownership by top author",
+              "type": "number"
+            },
+            {
+              "selector": "low",
+              "text": "-2 standard errors",
+              "type": "number"
+            },
+            {
+              "selector": "high",
+              "text": "+2 standard errors",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "File ownership by top author"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Entropy of change",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Work spread: effective files",
+      "description": "ENTROPY. What: over how many files the work of the last 100 code commits is effectively spread, each week; each commit counts once.\n\nRead: 12 means as if spread evenly over 12 files. Files per commit is shown because bigger commits spread work by themselves.\n\nTrend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_change_entropy",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Work spread: effective files",
+              "type": "number"
+            },
+            {
+              "selector": "files_per_commit",
+              "text": "files per commit",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 2
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Work spread: effective files"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files per commit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Work spread: effective modules",
+      "description": "ENTROPY. What: over how many modules the work of the last 100 code commits is effectively spread, each week.\n\nRead: 3 means as if spread evenly over 3 modules; it cannot exceed the module count (right axis).\n\nTrend: rising while the module count holds means work scatters; rising with it may only mean the code was split.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_module_entropy",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Work spread: effective modules",
+              "type": "number"
+            },
+            {
+              "selector": "modules",
+              "text": "modules",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 2
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Work spread: effective modules"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "modules"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Code structure",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Encapsulated code share ↑",
+      "description": "STRUCTURE. What: the share of function code in non-public functions (no pub, static, not exported, leading underscore). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare by_language over time.\n\nTrend: falling means the public surface grows faster than the code behind it.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 35
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_encapsulation",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Encapsulated code share",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Encapsulated code share"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Duplicated code share ↓",
+      "description": "STRUCTURE. What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals. Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 35
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_duplication",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Duplicated code share",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duplicated code share"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Code in large functions ↓",
+      "description": "STRUCTURE. What: the share of function code in functions over 200 tokens. Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare by_language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_concentration",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Code in large functions",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Code in large functions"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Local complexity",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Decision points per 100 tokens",
+      "description": "COMPLEXITY. What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens.\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare by_language over time.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_decisions",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Decision points per 100 tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Decision points per 100 tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Block nesting below function body",
+      "description": "COMPLEXITY. What: how many blocks deep function code sits below the function body, weighted by tokens; deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_nesting",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Block nesting below function body",
+              "type": "number"
+            },
+            {
+              "selector": "deep_share",
+              "text": "share nested deeper than 3",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Block nesting below function body"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "share nested deeper than 3"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Non-local control flow and state",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Global mutable state per 1,000 tokens",
+      "description": "NONLOCAL. What: declarations of global mutable state per 1,000 production tokens: Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare by_language over time.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 55
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_global_state",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Global mutable state per 1,000 tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Global mutable state per 1,000 tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Throws and panics per 1,000 tokens",
+      "description": "NONLOCAL. What: non-local exits per 1,000 production tokens: throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare by_language.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 55
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_exceptions",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Throws and panics per 1,000 tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Throws and panics per 1,000 tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "goto per 1,000 C/C++ tokens",
+      "description": "NONLOCAL. What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 55
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_goto",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "goto per 1,000 C/C++ tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "goto per 1,000 C/C++ tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -1232,30 +1671,30 @@
     {
       "id": 22,
       "type": "row",
-      "title": "Outcome",
+      "title": "Dependencies through imports",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 64
       },
       "panels": []
     },
     {
       "id": 23,
       "type": "timeseries",
-      "title": "fix follow ↓",
-      "description": "OUTCOME. Share of non-fix file changes that are followed by a fix commit touching the same file within 20 commits. Lower is better. This is the closest thing to a defect signal in the data, and the label to validate every other metric against. Noisy: depends on commit-message keywords.",
+      "title": "Share of its language's code a file depends on ↓",
+      "description": "DEPENDENCIES. What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "tally-infinity"
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 0,
-        "y": 73
+        "y": 65
       },
       "targets": [
         {
@@ -1272,7 +1711,7 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_fix_follow",
+          "root_selector": "$.m_dependency_reach",
           "format": "timeseries",
           "columns": [
             {
@@ -1281,8 +1720,23 @@
               "type": "timestamp"
             },
             {
-              "selector": "value",
-              "text": "fix follow",
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
               "type": "number"
             }
           ]
@@ -1294,17 +1748,78 @@
           "decimals": 2,
           "custom": {
             "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
+            "lineWidth": 2,
+            "spanNulls": false,
             "showPoints": "never",
             "fillOpacity": 0
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
-          "showLegend": false,
+          "showLegend": true,
           "displayMode": "list",
           "placement": "bottom"
         },
@@ -1316,31 +1831,18 @@
     },
     {
       "id": 24,
-      "type": "row",
-      "title": "Naming",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 81
-      },
-      "panels": []
-    },
-    {
-      "id": 25,
       "type": "timeseries",
-      "title": "naming ↓",
-      "description": "NAMING. Share of function names of 3 characters or fewer. Lower is better. A rising value or a falling name_len_mean flags identifier shortening. lexical_cohesion is the average share of a file's functions that contain the file's most common name word (files with 4+ functions); low values suggest grab-bag files. Weakest evidence of all metrics.",
+      "title": "Imports crossing modules (vs chance) ↓",
+      "description": "DEPENDENCIES. What: how often imports cross module boundaries, relative to chance, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means modules make no difference to what imports what; below 1, files mostly import within their module.\n\nTrend: rising means modules lean on each other more and stop matching the code's structure. Steps when modules are split or merged.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "tally-infinity"
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
-        "x": 0,
-        "y": 82
+        "x": 8,
+        "y": 65
       },
       "targets": [
         {
@@ -1357,7 +1859,171 @@
             "data": ""
           },
           "parser": "backend",
-          "root_selector": "$.m_naming",
+          "root_selector": "$.m_cross_module_imports",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "How changed files rank by dependencies",
+      "description": "DEPENDENCIES. What: how the files changed by commits rank among the files of their language by reach (the files they depend on), over the last 100 code commits each week.\n\nRead: 50% means work lands on typical files; 70% means on files that depend on more than 70% of their peers do. Active files usually rank high: read the trend. reach is their mean reach in files.\n\nTrend: rising means work concentrates on code that needs more context to change safely. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 65
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_changed_file_reach",
           "format": "timeseries",
           "columns": [
             {
@@ -1367,7 +2033,22 @@
             },
             {
               "selector": "value",
-              "text": "naming",
+              "text": "How changed files rank by dependencies",
+              "type": "number"
+            },
+            {
+              "selector": "low",
+              "text": "-2 standard errors",
+              "type": "number"
+            },
+            {
+              "selector": "high",
+              "text": "+2 standard errors",
+              "type": "number"
+            },
+            {
+              "selector": "reach",
+              "text": "files they depend on",
               "type": "number"
             }
           ]
@@ -1379,17 +2060,254 @@
           "decimals": 2,
           "custom": {
             "drawStyle": "line",
-            "lineWidth": 1,
-            "spanNulls": true,
+            "lineWidth": 2,
+            "spanNulls": false,
             "showPoints": "never",
             "fillOpacity": 0
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "How changed files rank by dependencies"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+2 standard errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    4,
+                    4
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files they depend on"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
-          "showLegend": false,
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Imports resolved (coverage of the charts beside)",
+      "description": "DEPENDENCIES. What: the share of imports naming this repository that resolve to a file, per language (c, rust, python, ecma). External code is left out.\n\nRead: the dependency charts miss what this misses. fallback_share counts imports resolved only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency charts read too low, not that the code changed.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "tally-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 74
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "tally-infinity"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.m_import_coverage",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
           "displayMode": "list",
           "placement": "bottom"
         },

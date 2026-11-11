@@ -62,7 +62,7 @@
             text = ''
               metrics="''${1:-metrics.json}"
               if [ ! -f "$metrics" ]; then
-                echo "usage: tally-grafana [metrics.json]  (write it with: tally metrics > metrics.json)" >&2
+                echo "usage: tally-grafana [metrics.json]  (write it with: tally metrics metrics.json)" >&2
                 exit 1
               fi
 
@@ -104,6 +104,7 @@
           # Tools only useful in an interactive shell.
           devOnlyInputs = [
             pkgs.duckdb
+            pkgs.python3 # grafana/generate.py
             tally-grafana
           ];
         in

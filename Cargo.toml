@@ -26,3 +26,10 @@ tempfile = "3.27.0"
 # The library is `extract` alone, so tests can call it; the binary is the rest.
 [lib]
 path = "src/extract.rs"
+
+# Tests plan many metric queries, so build DuckDB as in release even in test builds:
+# optimized, and without debug info, which libduckdb-sys turns into DuckDB's DEBUG
+# mode (internal assertions and verification passes).
+[profile.dev.package.libduckdb-sys]
+opt-level = 3
+debug = false

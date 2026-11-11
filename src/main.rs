@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use duckdb::types::{TimeUnit, Value};
 use duckdb::{Connection, OptionalExt, params};
 use gix::ObjectId;
@@ -15,16 +15,21 @@ use tally::{Lang, Span, extract};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod graph;
 mod metrics;
 
 /// Extractor version. Bump whenever `extract` output could change for any input.
-const V: i32 = 2;
+const V: i32 = 6;
 const MAX_BLOB_BYTES: usize = 1 << 20;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its
 /// size, so batching dominates throughput; an interrupt loses at most one batch.
 const BATCH: usize = 500;
 /// Warn about any blob whose extraction takes longer than this.
 const SLOW_BLOB: Duration = Duration::from_secs(1);
+/// DuckDB's memory ceiling and spill-to-disk ceiling for every query. Above
+/// them a query fails instead of exhausting the machine's memory or disk.
+const MEMORY_LIMIT: &str = "4GB";
+const SPILL_LIMIT: &str = "4GB";
 const DIVERGED: &str = "history diverged from the stored chain; reset the walk with: duckdb <db> \"delete from commits; delete from changes\" (parsed spans are kept), or delete the database file, then scan again";
 
 /// Record facts about a git repository's history into a DuckDB file.
@@ -42,13 +47,15 @@ enum Cli {
         #[arg(default_value = "HEAD")]
         rev: String,
     },
-    /// Compute metrics and print them as one JSON object: each metric's name maps
-    /// to an array of row objects.
+    /// Compute metrics into one JSON object: each metric's name maps to an array
+    /// of row objects.
     Metrics {
         #[arg(long, default_value = "tally.duckdb")]
         db: PathBuf,
+        /// File to write, replaced atomically; `-` writes to stdout.
+        output: PathBuf,
         /// Metrics to compute; all of them when omitted.
-        #[arg(value_name = "METRIC", value_parser = metrics::names())]
+        #[arg(value_name = "METRIC")]
         names: Vec<String>,
     },
 }
@@ -60,7 +67,11 @@ fn main() -> Result<()> {
         .with_ansi(std::io::stderr().is_terminal())
         .with_timer(tracing_subscriber::fmt::time::uptime())
         .init();
-    match Cli::parse() {
+    // Listing the metrics means binding metrics.sql, so the command that lists them
+    // (in `--help` and as the valid values of METRIC) is built only to report help
+    // or an error.
+    let cli = Cli::try_parse().unwrap_or_else(|_| usage());
+    match cli {
         Cli::Scan { repo, db, rev } => {
             let repo = gix::open(&repo).with_context(|| format!("open repository {repo:?}"))?;
             let mut db = open(&db)?;
@@ -68,27 +79,91 @@ fn main() -> Result<()> {
             let blobs = parse(&mut db, &repo)?;
             eprintln!("scanned {commits} commits, {changes} changes; parsed {blobs} blobs");
         }
-        Cli::Metrics { db, names } => {
-            println!("{}", metrics::export(&open(&db)?, &names)?);
+        Cli::Metrics { db, output, names } => {
+            let mut db = open(&db)?;
+            ensure!(
+                !metrics::exists(&db, &output.to_string_lossy())?,
+                "{output:?} is a metric; give the output file first, e.g. `tally metrics - {}`",
+                output.display()
+            );
+            for name in &names {
+                if !metrics::exists(&db, name)? {
+                    usage();
+                }
+            }
+            let json = metrics::export(&mut db, &names)?;
+            if output.as_os_str() == "-" {
+                println!("{json}");
+            } else {
+                // Write beside the target, then rename: readers never see a partial file.
+                let partial = output.with_extension("partial");
+                std::fs::write(&partial, json + "\n")
+                    .with_context(|| format!("write {partial:?}"))?;
+                std::fs::rename(&partial, &output)
+                    .with_context(|| format!("replace {output:?}"))?;
+                info!(?output, "metrics written");
+            }
         }
     }
     Ok(())
 }
 
+/// Parses the arguments again with the full command, which lists every metric, to
+/// print help or a usage error, and exits.
+fn usage() -> ! {
+    Cli::command()
+        .mut_subcommand("metrics", |c| {
+            c.mut_arg("names", |a| a.value_parser(metrics::names()))
+        })
+        .get_matches();
+    unreachable!("the arguments fail to parse with the full command too")
+}
+
 fn open(path: &Path) -> Result<Connection> {
     let db = Connection::open(path).with_context(|| format!("open database {path:?}"))?;
-    db.execute_batch(include_str!("schema.sql"))?;
-    let current: bool = db.query_row(
-        "select count(*) = 1 from duckdb_columns() where table_name = 'commits' and column_name = 'message'",
-        [],
-        |r| r.get(0),
-    )?;
-    ensure!(
-        current,
-        "{path:?} was created by an older tally without commit messages; delete it and scan again"
-    );
-    db.execute_batch(metrics::SQL)
-        .context("apply metrics.sql")?;
+    db.execute_batch(&format!(
+        "set memory_limit = '{MEMORY_LIMIT}'; set max_temp_directory_size = '{SPILL_LIMIT}'"
+    ))?;
+    // Views and macros are rebuilt from the SQL files whenever they differ from the
+    // ones the database was last opened with (`tally_sql()` holds their hash), so
+    // ones removed from the files disappear from existing databases too. Binding
+    // them costs more than a small query, so an unchanged database skips it.
+    let sql = format!("{}\n{}", include_str!("schema.sql"), metrics::SQL);
+    let hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(sql.as_bytes()));
+    let applied: Option<String> = db
+        .query_row(
+            "select function_name from duckdb_functions() where function_name = 'tally_sql'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .map(|()| db.query_row("select tally_sql()", [], |r| r.get(0)))
+        .transpose()?;
+    if applied.as_deref() != Some(hash.as_str()) {
+        let stale: Vec<String> = db
+            .prepare(
+                "select 'drop view ' || view_name from duckdb_views() where not internal
+                 union all
+                 select 'drop macro ' || if(function_type = 'table_macro', 'table ', '') || function_name
+                 from duckdb_functions() where function_type in ('macro', 'table_macro') and not internal",
+            )?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        db.execute_batch(&stale.join(";\n"))?;
+        db.execute_batch(include_str!("schema.sql"))?;
+        let current: bool = db.query_row(
+            "select count(*) = 1 from duckdb_columns() where table_name = 'spans' and column_name = 'depth'",
+            [],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            current,
+            "{path:?} was created by an older tally; delete it and scan again"
+        );
+        db.execute_batch(metrics::SQL)
+            .context("apply metrics.sql")?;
+        db.execute_batch(&format!("create macro tally_sql() as '{hash}'"))?;
+    }
     Ok(db)
 }
 
@@ -258,14 +333,28 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
             let Some(extracted) = extracted else {
                 let null = None::<i32>;
                 spans.append_row(params![
-                    blob, V, lang.name, "file", null, 1, null, null, null, null, null, null
+                    blob, V, lang.name, "file", null, 1, null, null, null, null, null, null, null,
+                    null, null
                 ])?;
                 continue;
             };
             for s in extracted {
                 spans.append_row(params![
-                    blob, V, lang.name, s.kind, s.name, s.line, s.end_line, s.tokens, s.comments,
-                    s.params, s.hash, s.errors
+                    blob,
+                    V,
+                    lang.name,
+                    s.kind,
+                    s.name,
+                    s.line,
+                    s.end_line,
+                    s.tokens,
+                    s.comments,
+                    s.params,
+                    s.hash,
+                    s.errors,
+                    s.start_byte,
+                    s.end_byte,
+                    s.depth
                 ])?;
             }
         }

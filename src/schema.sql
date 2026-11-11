@@ -4,7 +4,11 @@ create table if not exists changes (seq integer, path text, blob text);
 create table if not exists spans (
   blob text, v integer, lang text, kind text, name text,
   line integer, end_line integer, tokens integer, comments integer,
-  params integer, hash ubigint, errors integer);
+  params integer, hash ubigint, errors integer, start_byte integer, end_byte integer,
+  depth integer);
+
+-- Derived, not facts: `tally metrics` rebuilds it from import_edges before exporting.
+create or replace table cones (path text, since integer, until integer, cone integer, scc integer);
 
 create or replace view files as
 select path, blob, since, until from (

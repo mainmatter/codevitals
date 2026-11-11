@@ -17,7 +17,7 @@ new commits and it records only what is new.
 
 ```
 tally scan    [--repo <PATH>] [--db <PATH>] [REV]
-tally metrics [--db <PATH>] [METRIC]...
+tally metrics [--db <PATH>] <OUTPUT> [METRIC]...
 ```
 
 | Argument | Default | Meaning |
@@ -25,6 +25,7 @@ tally metrics [--db <PATH>] [METRIC]...
 | `--repo` | `.` | Path to a git repository |
 | `--db` | `tally.duckdb` | DuckDB database file; created if missing |
 | `REV` | `HEAD` | Revision whose first-parent history is scanned |
+| `OUTPUT` | required | JSON file to write, replaced atomically; `-` for stdout |
 | `METRIC` | all | Metric views to export; `tally metrics --help` explains each |
 
 `scan` logs phases and progress to stderr. Set `RUST_LOG=debug` for one line
@@ -36,8 +37,8 @@ objects. Every row has `seq`, the commit `time` in ISO 8601 UTC, `value`, and
 the metric's components:
 
 ```json
-{"m_locality":[{"seq":0,"time":"2016-04-12T18:28:55Z","value":1.0,"files_per_commit":10.0}, ...],
- "m_scatter":[{"seq":0,"time":"2016-04-12T18:28:55Z","win":0,"value":0.97,"files":287,"changes":429}, ...]}
+{"m_size":[{"seq":0,"time":"2016-04-12T18:28:55Z","value":2798,"files":10}, ...],
+ "m_hidden_coupling":[{"seq":0,"time":"2016-04-12T18:28:55Z","value":0.41,"observed":0.33,"expected":0.81,"commits":38}, ...]}
 ```
 
 For ad-hoc queries, open the database with the `duckdb` CLI.
@@ -81,18 +82,28 @@ first parent.
 | `blob` | Blob id |
 | `v` | Extractor version that produced the row |
 | `lang` | Language name |
-| `kind` | `file` (one per blob, the whole source), `fn`, `call`, `import`, a visibility marker (`pub` for Rust and JS/TS exports, `static` for C/C++), or any other capture name in the language's query file |
-| `name` | Name of the function, called function or import; `NULL` for `file` and markers |
+| `kind` | `file` (one per blob, the whole source), `fn`, `call`, `import`, `module` (a Rust inline `mod x { }`), a visibility marker (`pub` for Rust and JS/TS exports, `static` for C/C++), control-flow structure (`branch`, `condition`, `block`, `global_state`, `throw`, `goto`), or any other capture name in the language's query file |
+| `name` | Name of the function, called function or module; for `import`, one target path as written (`crate::a::B`, `pkg.mod.name`, `"x.h"`, `./a`), one span per target; `NULL` for `file` and markers |
 | `line`, `end_line` | 1-based first and last line |
 | `tokens` | Code tokens inside the span, excluding comments and whitespace |
 | `comments` | Words inside comments within the span |
 | `params` | Number of parameters; `NULL` if not applicable |
 | `hash` | XXH3 of the token kinds: equal for code that differs only in names and literals |
 | `errors` | Parse error nodes, for `file` only |
+| `start_byte`, `end_byte` | Byte range in the source, for containment between spans |
+| `depth` | How many spans of the same kind enclose this one, e.g. a block's nesting |
 
 A span counts everything inside it, so a nested function also counts toward
 its parent and everything counts toward `file`. Blobs over 1 MiB get only a
 `file` row with `NULL` counts.
+
+### `cones`: derived from the import graph
+
+`(path, since, until, cone, scc)`: from `since` to `until`, `path` reaches
+`cone` other files through imports, in a strongly connected component of `scc`
+files. Not a fact: `tally metrics` rebuilds it from `import_edges`, because a
+transitive closure at every commit is too costly in SQL. Run `tally metrics`
+after a scan before querying `m_dependency_reach` or `m_changed_file_reach` yourself.
 
 ### `files`: view
 
@@ -102,48 +113,95 @@ any commit.
 
 ## Metrics
 
+Every metric counts production code only: `path_roles` sets aside tests,
+vendored code and non-code files by common path conventions.
+
 | View | Measures | Better |
 |---|---|---|
-| `m_locality` | Share of the last 50 commits that stay inside one module | Higher |
-| `m_scatter` | Entropy of changes across files, per 50 commits | Lower |
-| `m_hidden_coupling` | Share of same-commit file pairs that span modules, per 100 commits | Lower |
-| `m_call_coupling` | Share of resolved cross-file calls that cross modules, plus mutually calling module pairs; every 50th commit | Lower; pairs at zero |
-| `m_encapsulation` | Share of function tokens in non-public functions | Higher |
-| `m_duplication` | Share of function tokens whose structure occurs more than once | Lower |
-| `m_interface_bloat` | Parameters per 100 function tokens | Lower |
-| `m_concentration` | Share of function tokens in functions over 200 tokens | Lower |
-| `m_sprawl` | Share of files in the largest directory | Lower |
-| `m_rework` | Share of modifications hitting a file changed in the last 5 commits, per 50 commits | Lower |
-| `m_fix_follow` | Share of changes followed by a fix to the same file within 20 commits; the outcome label | Lower |
-| `m_naming` | Share of function names of three characters or fewer, plus lexical cohesion | Lower |
+| `m_size` | Production code tokens (`value`) and files at each commit; context for every other chart | Neither |
+| `m_hidden_coupling` | How often files changed in one commit sit in different modules, as a lift over chance | Lower |
+| `m_rework` | Share of a commit's modifications to files already changed in the previous 7 days | Lower |
+| `m_change_entropy` | Over how many files work is effectively spread (order-2 effective number), with files per commit beside it | Lower |
+| `m_module_entropy` | Over how many modules work is effectively spread, with the number of live modules beside it | Lower |
+| `m_ownership` | How concentrated each file's changes are in its most active author | Higher |
+| `m_decisions` | Decision points (branches, `&&`/`||`) per 100 tokens, overall and `by_language` | Lower |
+| `m_nesting` | Mean block nesting below function bodies, weighted by function tokens, and the share nested deeper than 3 | Lower |
+| `m_global_state` | Declarations of global mutable state per 1,000 tokens | Lower |
+| `m_exceptions` | Throws, raises and panics (Rust `unwrap`/`expect` included) per 1,000 tokens | Lower |
+| `m_goto` | `goto` per 1,000 C/C++ tokens | Lower |
+| `m_encapsulation` | Share of function tokens in non-public functions, overall and `by_language` | Higher |
+| `m_duplication` | Share of function tokens whose structure occurs more than once, overall and `by_language` | Lower |
+| `m_concentration` | Share of function tokens in functions over 200 tokens, overall and `by_language` | Lower |
+| `m_dependency_reach` | Share of its language's code a typical file depends on through its imports and theirs (its *reach*), per language | Lower |
+| `m_cross_module_imports` | How often imports cross module boundaries, relative to chance, per language | Lower |
+| `m_changed_file_reach` | Where changed files rank among their language's files by reach (50% = typical) | Lower |
+| `m_import_coverage` | Share of imports naming this repository that resolve to a file, per language: the coverage of the three above | Neither (a check) |
 
-`tally metrics --help` and `select comment from duckdb_views()` give the full
-explanation of each. Three combinations carry more signal than any single
-metric: sprawl improving while locality and hidden coupling do not (fake
-modularity); concentration improving while interface bloat worsens (splitting
-without simplifying); call or hidden coupling rising while encapsulation falls
-(entanglement creep).
+A *lift* divides an observed value by its chance level, so 1 means no
+difference: for hidden coupling, module labels shuffled among the files
+involved (an exact null), with `observed` and `expected` kept as components;
+for cross-module imports, every import rewired at random within its language family
+keeping how much each module imports and is imported. Files import only files of
+their own language family, so the dependency metrics report each family as a
+column (`c`, `rust`, `python`, `ecma`); read those, since the combined value
+moves when the language mix changes. Size is a series of its own, never a divisor: judge the
+other trends against it.
 
-The helper views `commit_info` (`subject`, `is_fix`, `is_agent`), `fns` (one
-row per function with a `public` flag) and `call_edges` (a heuristic call graph)
-are available for your own queries. Modules are directories at depth 2
-(`module(path, 2)`); thresholds and windows are constants in `src/metrics.sql`.
-Calibrate them against a repository you consider healthy, and validate any
-metric against `m_fix_follow` before relying on it.
+Size, structure and dependencies are computed at every commit. The change and entropy metrics
+use a trailing window of the last 100 commits that touched production code,
+read off once per ISO week, so every point has the same sample size;
+`span_weeks` says how much calendar time a window covers, and windows spanning
+more than 26 weeks are left out. `low` and `high` span two standard errors of one
+window; neighbouring windows share most of their commits, so a run of points
+moving together is one change, not many. `tally metrics --help` and
+`select comment from duckdb_views()` explain each metric: what it measures,
+how to read the chart, and what a trend implies.
+
+None of the metrics is validated against defects yet. Read trends within one
+repository, not absolute values or comparisons between repositories, and gate
+on nothing until a metric has passed a validation study.
+
+The helper views `commit_info` (`subject`, `is_fix`, `is_agent` for coding-agent
+co-author trailers, `is_bot` for `[bot]` authors), `fns` (one row per function
+with a `public` flag), `import_status` (every import over time, classified
+`resolved`, `ambiguous`, `external` or `unresolved`, with its target file),
+`import_edges` (the import graph between production files as intervals),
+`path_roles` and `path_modules` are
+available for your own queries. A file's module is its nearest directory that ever held a
+`Cargo.toml`, `package.json` or `pyproject.toml` (never the repository root),
+else its directory at a fixed depth. The module depth, windows and thresholds
+are named constants at the top of `src/metrics.sql`.
 
 To add a metric, add a view named `m_<name>` with `seq` and `value` columns and
-a `comment on view` to `src/metrics.sql`, and a panel to the Grafana dashboard.
-The tests fail for a metric view without the right columns or without a
-matching panel.
+a `comment on view` (a category, then What, Read and Trend paragraphs) to
+`src/metrics.sql`, then regenerate the Grafana dashboard with
+`python3 grafana/generate.py`. The tests fail for a metric view without the
+right columns or without a matching panel.
+
+## Development
+
+Work inside the Nix dev shell: it has the Rust toolchain pinned in
+`rust-toolchain.toml`, the `duckdb` CLI, Python for the dashboard generator, and
+`tally-grafana`. Building in and out of it alternately rebuilds everything
+(DuckDB included), since the compiler and environment differ. With direnv the
+shell loads on entering the directory, for terminals and editors alike (VS Code:
+the direnv extension):
+
+```
+nix profile install nixpkgs#direnv     # once per machine
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
+direnv allow                           # once per checkout
+```
+
+Without direnv, use `nix develop`.
 
 ## Grafana
 
-The Nix dev shell (`nix develop`, or `direnv allow` with the `.envrc`) has the
-Rust toolchain, the `duckdb` CLI and `tally-grafana`:
+In the dev shell:
 
 ```
 tally scan --repo ../project
-tally metrics > metrics.json
+tally metrics metrics.json
 tally-grafana metrics.json      # http://127.0.0.1:3000/d/tally
 ```
 

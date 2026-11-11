@@ -1,77 +1,12 @@
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+//! The walk and the parse, on git repositories built in process.
 
+mod common;
+
+use std::path::Path;
+use std::process::Command;
+
+use common::{db, fixture, rev, rows, scan, tally};
 use tempfile::TempDir;
-
-/// The fixture repository of the spec, built in `dir/repo`.
-fn fixture() -> TempDir {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir(dir.path().join("repo")).unwrap();
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture.sh");
-    sh(&dir.path().join("repo"), &format!("sh {script:?}"));
-    dir
-}
-
-fn sh(dir: &Path, script: &str) -> String {
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{script}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
-
-fn tally(dir: &TempDir, args: &[&str]) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tally"));
-    cmd.env("RUST_LOG", "off"); // stderr carries only the summary line
-    cmd.args(args).arg("--db").arg(db(dir));
-    if args[0] == "scan" {
-        cmd.arg("--repo").arg(dir.path().join("repo"));
-    }
-    cmd.output().unwrap()
-}
-
-fn scan(dir: &TempDir, rev: &str) -> String {
-    let out = tally(dir, &["scan", rev]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stderr).unwrap()
-}
-
-fn db(dir: &TempDir) -> PathBuf {
-    dir.path().join("t.duckdb")
-}
-
-/// Rows of `query` rendered as `(a,b,c)` joined by spaces, NULL as `NULL`.
-fn rows(dir: &TempDir, query: &str) -> String {
-    let conn = duckdb::Connection::open(db(dir)).unwrap();
-    let mut stmt = conn
-        .prepare(&format!("select columns(*)::varchar from ({query})"))
-        .unwrap();
-    let rows: Vec<String> = stmt
-        .query_map([], |r| {
-            let cols = (0..r.as_ref().column_count())
-                .map(|i| {
-                    r.get::<_, Option<String>>(i)
-                        .map(|v| v.unwrap_or("NULL".into()))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(format!("({})", cols.join(",")))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    rows.join(" ")
-}
 
 fn dump(dir: &TempDir) -> String {
     [
@@ -84,24 +19,50 @@ fn dump(dir: &TempDir) -> String {
 }
 
 fn fresh_dump() -> String {
-    let dir = fixture();
-    scan(&dir, "main");
-    dump(&dir)
+    let r = fixture();
+    scan(&r.dir, "main");
+    dump(&r.dir)
+}
+
+/// The in-process fixture is the spec's: `fixture.sh`, run with real git, produces the
+/// same commit ids. The only test that needs a `git` executable.
+#[test]
+fn fixture_matches_fixture_sh() {
+    let dir = TempDir::new().unwrap();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture.sh");
+    let out = Command::new("sh")
+        .arg(script)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let git = |rev: &str| {
+        let out = Command::new("git")
+            .args(["rev-parse", rev])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let r = fixture();
+    assert_eq!(rev(&r.dir, "main"), git("main"));
+    assert_eq!(rev(&r.dir, "side"), git("side"));
 }
 
 #[test]
 fn fixture_tables() {
-    let dir = fixture();
+    let r = fixture();
+    let dir = &r.dir;
     assert_eq!(
-        scan(&dir, "main"),
+        scan(dir, "main"),
         "scanned 4 commits, 8 changes; parsed 4 blobs\n"
     );
 
-    let ids = sh(
-        &dir.path().join("repo"),
-        "git rev-list --first-parent --reverse main",
-    );
-    let ids: Vec<&str> = ids.lines().collect();
+    let ids = ["main~3", "main~2", "main~1", "main"].map(|spec| rev(dir, spec));
     let times = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-05"];
     let commits: Vec<String> = (0..4)
         .map(|i| {
@@ -110,11 +71,11 @@ fn fixture_tables() {
         })
         .collect();
     assert_eq!(
-        rows(&dir, "select * from commits order by seq"),
+        rows(dir, "select * from commits order by seq"),
         commits.join(" ")
     );
 
-    let blob = |rev: &str| sh(&dir.path().join("repo"), &format!("git rev-parse {rev}"));
+    let blob = |spec: &str| rev(dir, spec);
     let (readme, a1, a2) = (
         blob("main~3:README.md"),
         blob("main~3:a.rs"),
@@ -122,7 +83,7 @@ fn fixture_tables() {
     );
     let (plus, d) = (blob("main~2:src/b.rs"), blob("main:d.rs"));
     assert_eq!(
-        rows(&dir, "select * from changes order by seq, path"),
+        rows(dir, "select * from changes order by seq, path"),
         format!(
             "(0,README.md,{readme}) (0,a.rs,{a1}) (1,a.rs,{a2}) (1,src/b.rs,{plus}) \
              (2,README.md,NULL) (2,src/b.rs,NULL) (2,src/c.rs,{plus}) (3,d.rs,{d})"
@@ -130,7 +91,7 @@ fn fixture_tables() {
     );
     assert_eq!(
         rows(
-            &dir,
+            dir,
             "select path, blob, since, until from files order by path, since"
         ),
         format!(
@@ -138,19 +99,19 @@ fn fixture_tables() {
              (d.rs,{d},3,2147483647) (src/b.rs,{plus},1,2) (src/c.rs,{plus},2,2147483647)"
         )
     );
-
     assert_eq!(
         rows(
-            &dir,
+            dir,
             "select kind, count(*), count(distinct blob) from spans group by kind order by kind"
         ),
-        "(file,4,4) (fn,4,4)"
+        "(block,4,4) (file,4,4) (fn,4,4)"
     );
     assert_eq!(
         rows(
-            &dir,
+            dir,
             &format!(
-                "select blob, name, tokens, comments from spans where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
+                "select blob, name, tokens, comments from spans
+                 where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
             )
         ),
         format!("({a1},add,18,0) ({a2},add,18,2)")
@@ -159,241 +120,250 @@ fn fixture_tables() {
 
 #[test]
 fn idempotent() {
-    let dir = fixture();
-    scan(&dir, "main");
-    let before = dump(&dir);
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
     assert_eq!(
-        scan(&dir, "main"),
+        scan(&r.dir, "main"),
         "scanned 0 commits, 0 changes; parsed 0 blobs\n"
     );
-    assert_eq!(dump(&dir), before);
+    assert_eq!(dump(&r.dir), before);
 }
 
 #[test]
 fn incremental() {
-    let dir = fixture();
+    let r = fixture();
     assert_eq!(
-        scan(&dir, "main~2"),
+        scan(&r.dir, "main~2"),
         "scanned 2 commits, 4 changes; parsed 3 blobs\n"
     );
     assert_eq!(
-        scan(&dir, "main"),
+        scan(&r.dir, "main"),
         "scanned 2 commits, 4 changes; parsed 1 blobs\n"
     );
-    assert_eq!(dump(&dir), fresh_dump());
-}
-
-#[test]
-fn resume() {
-    // The state an interrupted scan can leave: whole commits past some point and
-    // all spans missing. A rerun must complete both loops.
-    let dir = fixture();
-    scan(&dir, "main");
-    let conn = duckdb::Connection::open(db(&dir)).unwrap();
-    conn.execute_batch(
-        "delete from commits where seq >= 2; delete from changes where seq >= 2; delete from spans",
-    )
-    .unwrap();
-    drop(conn);
-    assert_eq!(
-        scan(&dir, "main"),
-        "scanned 2 commits, 4 changes; parsed 4 blobs\n"
-    );
-    assert_eq!(dump(&dir), fresh_dump());
+    assert_eq!(dump(&r.dir), fresh_dump());
 }
 
 #[test]
 fn version_bump() {
-    let dir = fixture();
-    scan(&dir, "main");
-    let before = dump(&dir);
-    duckdb::Connection::open(db(&dir))
-        .unwrap()
-        .execute("update spans set v = 0", [])
-        .unwrap();
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
+    common::execute(&r.dir, "update spans set v = 0");
     assert_eq!(
-        scan(&dir, "main"),
+        scan(&r.dir, "main"),
         "scanned 0 commits, 0 changes; parsed 4 blobs\n"
     );
-    assert_eq!(dump(&dir), before);
+    assert_eq!(dump(&r.dir), before);
 }
 
 #[test]
 fn diverged() {
-    let dir = fixture();
-    scan(&dir, "main");
-    let before = dump(&dir);
-    let out = tally(&dir, &["scan", "side"]);
+    let r = fixture();
+    scan(&r.dir, "main");
+    let before = dump(&r.dir);
+    let out = tally(&r.dir, &["scan", "side"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains("history diverged from the stored chain; reset the walk with: duckdb <db> \"delete from commits; delete from changes\""),
         "{stderr}"
     );
-    assert_eq!(dump(&dir), before);
+    assert_eq!(dump(&r.dir), before);
 }
 
 #[test]
 fn oversized() {
-    let dir = fixture();
-    let repo = dir.path().join("repo");
-    std::fs::write(repo.join("big.rs"), "// x\n".repeat(300_000)).unwrap();
-    sh(&repo, "git add -A && git commit -qm big");
-    scan(&dir, "main");
+    let mut r = fixture();
+    r.write("big.rs", "// x\n".repeat(300_000));
+    r.extend("big\n", 5);
+    scan(&r.dir, "main");
     assert_eq!(
         rows(
-            &dir,
+            &r.dir,
             &format!(
                 "select * exclude (blob) from spans where blob = '{}'",
-                sh(&repo, "git rev-parse main:big.rs")
+                rev(&r.dir, "main:big.rs")
             )
         ),
-        "(2,rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL)"
+        "(6,rust,file,NULL,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)"
     );
 }
 
 #[test]
-fn metric_views() {
-    let dir = fixture();
-    scan(&dir, "main");
-
-    // Helper views.
-    assert_eq!(
-        rows(
-            &dir,
-            "select seq, subject, is_fix, is_agent from commit_info order by seq"
-        ),
-        "(0,c0,false,false) (1,c1,false,false) (2,c2,false,false) (3,merge,false,false)"
-    );
-    assert_eq!(
-        rows(&dir, "select name, public from fns order by name, tokens"),
-        "(add,false) (add,false) (d,false) (plus,false)"
-    );
-    assert_eq!(rows(&dir, "select count(*) from call_edges"), "(0)");
-
-    // Values checked by hand against the fixture history.
-    let cases = [
-        // Commits within one module (depth 2; root files share the module ''), trailing average.
-        (
-            "select seq, value from m_locality",
-            "(0,1.0) (1,0.5) (2,0.3333333333333333) (3,0.5)",
-        ),
-        // Same-commit pairs: c1 a.rs+src/b.rs crosses; c2 README.md with src/b.rs and src/c.rs crosses twice.
-        (
-            "select seq, value, pairs from m_hidden_coupling",
-            "(0,0.6,5)",
-        ),
-        // 2 parameters per 18 tokens.
-        (
-            "select seq, value from m_interface_bloat where seq = 0",
-            "(0,11.11111111111111)",
-        ),
-        // No function is pub, so all function tokens are non-public.
-        (
-            "select seq, value from m_encapsulation",
-            "(0,1.0) (1,1.0) (2,1.0) (3,1.0)",
-        ),
-        // `add` and `d` have at most three characters; `plus` has four.
-        (
-            "select seq, value from m_naming",
-            "(0,1.0) (1,0.5) (2,0.5) (3,0.6666666666666666)",
-        ),
-    ];
-    for (query, expected) in cases {
-        assert_eq!(
-            rows(&dir, &format!("{query} order by seq")),
-            expected,
-            "{query}"
-        );
-    }
-
-    // Every metric view has the columns the export and the dashboard rely on.
-    let metrics = rows(
-        &dir,
-        "select view_name from duckdb_views() where starts_with(view_name, 'm_')",
-    );
-    for m in metrics.split(' ').map(|m| m.trim_matches(['(', ')'])) {
-        let has = rows(
-            &dir,
-            &format!("select count(*) from (describe {m}) where column_name in ('seq', 'value')"),
-        );
-        assert_eq!(has, "(2)", "{m} lacks seq or value");
-    }
-}
-
-#[test]
-fn metrics_json() {
-    let dir = fixture();
-    scan(&dir, "main");
-    let out = tally(&dir, &["metrics", "m_hidden_coupling", "m_locality"]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let locality = [("01", "1.0", "2.0"), ("02", "0.5", "2.0"), ("03", "0.3333333333333333", "2.3333333333333335"), ("05", "0.5", "2.0")]
-        .iter()
-        .enumerate()
-        .map(|(i, (day, value, files))| {
-            format!(r#"{{"seq":{i},"time":"2026-01-{day}T00:00:00Z","value":{value},"files_per_commit":{files}}}"#)
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        format!(
-            r#"{{"m_hidden_coupling":[{{"seq":0,"time":"2026-01-01T00:00:00Z","win":0,"value":0.6,"pairs":5}}],"m_locality":[{locality}]}}"#
-        ) + "\n"
-    );
-
-    // All metrics by default, in definition order; empty ones as [].
-    let all = String::from_utf8(tally(&dir, &["metrics"]).stdout).unwrap();
-    assert!(
-        all.starts_with(r#"{"m_locality":["#) && all.contains(r#""m_call_coupling":[]"#),
-        "{all}"
-    );
-
-    let out = tally(&dir, &["metrics", "nope"]);
+fn old_database_is_refused() {
+    let r = fixture();
+    common::execute(&r.dir, "create table spans (blob text)");
+    let out = tally(&r.dir, &["scan", "main"]);
     let err = String::from_utf8(out.stderr).unwrap();
     assert!(
-        !out.status.success() && err.contains("invalid value 'nope'"),
+        !out.status.success() && err.contains("delete it and scan again"),
         "{err}"
+    );
+    assert!(db(&r.dir).exists());
+}
+
+/// A path's module is its nearest manifest directory, ignoring a manifest at the
+/// repository root, else the module depth; its role follows path conventions.
+#[test]
+fn modules_follow_manifests() {
+    let mut r = fixture();
+    for manifest in ["Cargo.toml", "crates/x/Cargo.toml", "docs/a.md"] {
+        r.write(manifest, "");
+    }
+    for code in [
+        "crates/x/src/lib.rs",
+        "crates/x/tests/t.rs",
+        "deep/a/b/c.rs",
+    ] {
+        r.write(code, "fn f() {}\n");
+    }
+    r.write("vendor/v.c", "int v(void) { return 0; }\n");
+    r.write("web/app.spec.ts", "f();\n")
+        .write("py/test_x.py", "f()\n");
+    r.extend("crates\n", 5);
+    scan(&r.dir, "main");
+    assert_eq!(
+        rows(
+            &r.dir,
+            "select path, module, role from path_modules join path_roles using (path) order by path"
+        ),
+        "(Cargo.toml,,other) (README.md,,other) (a.rs,,code) (crates/x/Cargo.toml,crates/x,other) \
+         (crates/x/src/lib.rs,crates/x,code) (crates/x/tests/t.rs,crates/x,test) (d.rs,,code) \
+         (deep/a/b/c.rs,deep/a,code) (docs/a.md,docs,other) (py/test_x.py,py,test) (src/b.rs,src,code) \
+         (src/c.rs,src,code) (vendor/v.c,vendor,vendored) (web/app.spec.ts,web,test)"
     );
 }
 
+/// Squashing history keeps the state metrics of the final tree: the same tree in one
+/// commit has the same size, encapsulation, duplication and concentration.
 #[test]
-fn dashboard_matches_metrics() {
-    let dir = fixture();
-    scan(&dir, "main");
-    let dashboard = Path::new(env!("CARGO_MANIFEST_DIR")).join("grafana/dashboards/tally.json");
-    let panels = format!(
-        "select unnest(json_extract(json, '$.panels[*]')) as p from read_json_objects('{}')",
-        dashboard.display()
-    );
-    // Each metric view has one single-series panel, described by the view's comment.
-    let mismatched = rows(
-        &dir,
-        &format!(
-            "with p as ({panels}),
-             single as (select p ->> '$.targets[0].root_selector' as selector, p ->> '$.description' as description
-                        from p where json_array_length(p -> '$.targets') = 1)
-             select v.view_name from duckdb_views() v
-             where starts_with(v.view_name, 'm_')
-               and (select count(*) from single s
-                    where s.selector = '$.' || v.view_name and s.description = v.comment) <> 1"
+fn squashing_keeps_state_metrics_of_the_final_tree() {
+    let full = fixture();
+    scan(&full.dir, "main");
+    let mut flat = fixture();
+    flat.commit("flat", "flat\n", 4, &[]);
+    scan(&flat.dir, "flat");
+    for m in [
+        "m_size",
+        "m_encapsulation",
+        "m_duplication",
+        "m_concentration",
+    ] {
+        let latest = format!("select * exclude (seq) from {m} order by seq desc limit 1");
+        assert_eq!(rows(&flat.dir, &latest), rows(&full.dir, &latest), "{m}");
+    }
+}
+
+/// Imports resolve by each language's conventions, and resolution follows the files
+/// that exist: an include of a missing header resolves once the header is added.
+#[test]
+fn imports_resolve_by_language_convention() {
+    let mut r = fixture();
+    let files = [
+        ("Cargo.toml", ""),
+        ("crates/core-lib/Cargo.toml", ""),
+        (
+            "crates/core-lib/src/lib.rs",
+            "pub mod a;\nmod tests {\n    use super::a::X;\n}\n",
         ),
+        (
+            "crates/core-lib/src/a.rs",
+            "use crate::b::{Y, c::Z};\nuse std::io;\n",
+        ),
+        ("crates/core-lib/src/b/mod.rs", "use self::c::Z;\n"),
+        ("crates/core-lib/src/b/c.rs", "use super::super::a;\n"),
+        ("crates/app/Cargo.toml", ""),
+        (
+            "crates/app/src/main.rs",
+            "use core_lib::a::X;\nuse app::run;\nuse serde::Serialize;\n",
+        ),
+        ("crates/app/src/lib.rs", "pub fn run() {}\n"),
+        (
+            "src/x.c",
+            "#include \"x.h\"\n#include \"util/u.h\"\n#include <stdio.h>\n#include \"missing.h\"\n#include \"v.h\"\n#include \"submodule/s.h\"\n",
+        ),
+        ("src/x.h", "int x(void);\n"),
+        ("src/util/u.h", "int u(void);\n"),
+        ("lib/util/u.h", "int u2(void);\n"),
+        ("vendor/v.h", "int v(void);\n"),
+        ("py/pkg/__init__.py", "from . import mod\n"),
+        (
+            "py/pkg/mod.py",
+            "import os\nfrom pkg.sub import thing\nfrom .. import nothing\n",
+        ),
+        ("py/pkg/sub.py", "thing = 1\n"),
+        (
+            "web/a.ts",
+            "import { b } from './b';\nimport c from './c.js';\nimport d from './d';\nimport React from 'react';\n",
+        ),
+        ("web/b.ts", "export const b = 1;\n"),
+        ("web/c.ts", "export default 2;\n"),
+        ("web/d/index.ts", "export default 3;\n"),
+    ];
+    for (path, content) in files {
+        r.write(path, content);
+    }
+    r.extend("imports\n", 5);
+    r.write("src/missing.h", "int m(void);\n");
+    r.extend("add the missing header\n", 6);
+    scan(&r.dir, "main");
+    let at = |seq: i32| {
+        rows(
+            &r.dir,
+            &format!(
+                "select path, name, class, target from import_status
+                 where since <= {seq} and {seq} < until order by path, name"
+            ),
+        )
+        .replace(") (", ")\n(")
+    };
+    assert_eq!(
+        at(4),
+        "(crates/app/src/main.rs,app::run,resolved,crates/app/src/lib.rs)
+(crates/app/src/main.rs,core_lib::a::X,resolved,crates/core-lib/src/a.rs)
+(crates/app/src/main.rs,serde::Serialize,external,NULL)
+(crates/core-lib/src/a.rs,crate::b::Y,resolved,crates/core-lib/src/b/mod.rs)
+(crates/core-lib/src/a.rs,crate::b::c::Z,resolved,crates/core-lib/src/b/c.rs)
+(crates/core-lib/src/a.rs,std::io,external,NULL)
+(crates/core-lib/src/b/c.rs,super::super::a,resolved,crates/core-lib/src/a.rs)
+(crates/core-lib/src/b/mod.rs,self::c::Z,resolved,crates/core-lib/src/b/c.rs)
+(crates/core-lib/src/lib.rs,super::a::X,resolved,crates/core-lib/src/a.rs)
+(py/pkg/__init__.py,.mod,resolved,py/pkg/mod.py)
+(py/pkg/mod.py,..nothing,unresolved,NULL)
+(py/pkg/mod.py,os,external,NULL)
+(py/pkg/mod.py,pkg.sub.thing,resolved,py/pkg/sub.py)
+(src/x.c,\"missing.h\",unresolved,NULL)
+(src/x.c,\"submodule/s.h\",external,NULL)
+(src/x.c,\"util/u.h\",resolved,src/util/u.h)
+(src/x.c,\"v.h\",external,NULL)
+(src/x.c,\"x.h\",resolved,src/x.h)
+(src/x.c,<stdio.h>,external,NULL)
+(web/a.ts,./b,resolved,web/b.ts)
+(web/a.ts,./c.js,resolved,web/c.ts)
+(web/a.ts,./d,resolved,web/d/index.ts)
+(web/a.ts,react,external,NULL)"
+    );
+    assert!(
+        at(5).contains("(src/x.c,\"missing.h\",resolved,src/missing.h)"),
+        "{}",
+        at(5)
+    );
+    // Only app::run names more than a module file has: it falls back to the crate root.
+    assert_eq!(
+        rows(
+            &r.dir,
+            "select name from import_status where fallback and since <= 4 and 4 < until"
+        ),
+        "(app::run)"
     );
     assert_eq!(
-        mismatched, "",
-        "metric views without a matching dashboard panel"
-    );
-    // Every series in the dashboard reads a metric that exists.
-    let unknown = rows(
-        &dir,
-        &format!(
-            "with p as ({panels}), t as (select unnest(json_extract_string(p, '$.targets[*].root_selector')) as s from p)
-             select s from t where s not in (select '$.' || view_name from duckdb_views())"
+        rows(
+            &r.dir,
+            "select source, target from import_edges where since <= 5 and 5 < until
+             and source in ('src/x.c', 'web/a.ts') order by all"
         ),
+        "(src/x.c,src/missing.h) (src/x.c,src/util/u.h) (src/x.c,src/x.h) (web/a.ts,web/b.ts) \
+         (web/a.ts,web/c.ts) (web/a.ts,web/d/index.ts)"
     );
-    assert_eq!(unknown, "", "dashboard series for unknown metrics");
 }

@@ -13,8 +13,8 @@ use xxhash_rust::xxh3::xxh3_64;
 pub struct Lang {
     pub name: &'static str,
     pub exts: &'static [&'static str],
-    pub grammar: fn() -> Language,
-    pub query: &'static str,
+    grammar: fn() -> Language,
+    query: &'static str,
 }
 
 pub const LANGS: &[Lang] = &[
@@ -92,7 +92,7 @@ impl Lang {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
-    pub kind: String,
+    pub kind: &'static str,
     pub name: Option<String>,
     pub line: i32,
     pub end_line: i32,
@@ -101,6 +101,11 @@ pub struct Span {
     pub params: Option<i32>,
     pub hash: u64,
     pub errors: Option<i32>,
+    /// Byte range in the source, so SQL can test containment between spans.
+    pub start_byte: i32,
+    pub end_byte: i32,
+    /// Spans of the same kind that strictly contain this one, e.g. a block's nesting.
+    pub depth: i32,
 }
 
 /// Parse `src`, run the language's query and return the `file` span followed by
@@ -195,7 +200,7 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         "leaves are disjoint and ordered"
     );
 
-    let span = |kind: &str, bytes: Range<usize>, start: Point, end: Point| {
+    let span = |kind: &'static str, bytes: Range<usize>, start: Point, end: Point| {
         // Leaves are disjoint and sorted, so both their starts and ends are sorted.
         let lo = leaves.partition_point(|l| l.0 < bytes.start);
         let hi = leaves.partition_point(|l| l.1 <= bytes.end);
@@ -209,7 +214,10 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
             end.row + 1
         };
         Span {
-            kind: kind.to_owned(),
+            kind,
+            start_byte: int(bytes.start),
+            end_byte: int(bytes.end),
+            depth: 0,
             name: None,
             line: int(line),
             end_line: int(end_line.max(line)),
@@ -234,6 +242,9 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
     let mut file = span("file", 0..src.len(), Point::new(0, 0), src_end);
     file.errors = Some(int(errors));
 
+    // Spans come ordered by start, outer before inner, so the open spans of a kind
+    // form a stack of end offsets: a span's depth is how many of them are still open.
+    let mut open = std::collections::HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
     for ((_, _, kind), (node, name, params)) in spans {
         let mut s = span(
@@ -242,6 +253,12 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
             node.start_position(),
             node.end_position(),
         );
+        let stack = open.entry(kind).or_default();
+        while stack.last().is_some_and(|&end| end <= node.start_byte()) {
+            stack.pop();
+        }
+        s.depth = int(stack.len());
+        stack.push(node.end_byte());
         s.name = name.map(text);
         s.params = params.map(|p| {
             int(p
@@ -249,9 +266,108 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
                 .filter(|&n| !is_comment(n))
                 .count())
         });
-        out.push(s);
+        if kind == "import" {
+            // One span per imported path, all over the statement's bytes.
+            for target in import_targets(node, &text) {
+                out.push(Span {
+                    name: Some(target),
+                    ..s.clone()
+                });
+            }
+        } else {
+            out.push(s);
+        }
     }
     out
+}
+
+/// The paths an import statement names, one per target, as written: Rust use trees
+/// flattened (`a::{b, c::d}` gives `a::b` and `a::c::d`), Python names joined to
+/// their module (`from a import b` gives `a.b`), C includes with their quotes or
+/// angle brackets, ECMAScript module specifiers without quotes.
+fn import_targets(node: Node, text: &impl Fn(Node) -> String) -> Vec<String> {
+    let field = |f: &str| node.child_by_field_name(f);
+    let python_name = |n: Node| {
+        let name = n
+            .child_by_field_name("name")
+            .filter(|_| n.kind() == "aliased_import");
+        text(name.unwrap_or(n))
+    };
+    let names: Vec<_> = node
+        .children_by_field_name("name", &mut node.walk())
+        .collect();
+    match node.kind() {
+        "use_declaration" => {
+            let mut out = vec![];
+            use_paths(
+                field("argument").expect("use has an argument"),
+                "",
+                text,
+                &mut out,
+            );
+            out
+        }
+        "preproc_include" => vec![text(field("path").expect("include has a path"))],
+        "import_statement" | "export_statement" => match field("source") {
+            Some(source) => vec![text(source).trim_matches(['"', '\'', '`']).to_owned()],
+            None => names.into_iter().map(python_name).collect(),
+        },
+        "import_from_statement" => {
+            let module = text(field("module_name").expect("from has a module"));
+            let sep = if module.ends_with('.') { "" } else { "." };
+            if names.is_empty() {
+                return vec![module]; // from a import *
+            }
+            names
+                .into_iter()
+                .map(|n| format!("{module}{sep}{}", python_name(n)))
+                .collect()
+        }
+        other => panic!("no import targets for {other}"),
+    }
+}
+
+fn use_paths(node: Node, prefix: &str, text: &impl Fn(Node) -> String, out: &mut Vec<String>) {
+    let join = |p: &str, x: &str| match (p, x) {
+        ("", x) => x.to_owned(),
+        (p, "self") => p.to_owned(),
+        (p, x) => format!("{p}::{x}"),
+    };
+    match node.kind() {
+        "use_list" => {
+            for child in node.named_children(&mut node.walk()) {
+                if !child.kind().ends_with("comment") {
+                    use_paths(child, prefix, text, out);
+                }
+            }
+        }
+        "scoped_use_list" => {
+            let path = node.child_by_field_name("path").map_or(String::new(), text);
+            let list = node
+                .child_by_field_name("list")
+                .expect("scoped use list has a list");
+            use_paths(list, &join(prefix, &path), text, out);
+        }
+        "use_as_clause" => {
+            use_paths(
+                node.child_by_field_name("path").expect("use as has a path"),
+                prefix,
+                text,
+                out,
+            );
+        }
+        "use_wildcard" => {
+            let path = text(node);
+            out.push(join(
+                prefix,
+                path.trim_end_matches('*').trim_end_matches("::"),
+            ));
+        }
+        _ => {
+            let path: String = text(node).split_whitespace().collect();
+            out.push(join(prefix, &path));
+        }
+    }
 }
 
 fn int(n: usize) -> i32 {

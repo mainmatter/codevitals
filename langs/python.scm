@@ -1,5 +1,9 @@
 (function_definition name: (identifier) @name parameters: (parameters) @params) @fn
 (comment) @comment
-(import_statement name: (_) @name) @import
-(import_from_statement module_name: (_) @name) @import
+[(import_statement) (import_from_statement)] @import
 (call function: [(identifier) @name (attribute attribute: (identifier) @name)]) @call
+[(if_statement) (elif_clause) (while_statement) (for_statement) (except_clause) (conditional_expression) (case_clause) (if_clause)] @branch
+(boolean_operator) @condition
+(block) @block
+[(global_statement) (nonlocal_statement)] @global_state
+(raise_statement) @throw

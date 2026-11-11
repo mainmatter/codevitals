@@ -1,335 +1,208 @@
-# tally: implementation spec
+# tally: specification
 
-Revision 2: commit authors and messages, private captures, call and visibility
-facts, and built-in metrics as SQL views (`src/metrics.sql`). Parallel parsing,
-logging and the `metrics` subcommand replace the MVP's `sql` subcommand.
+tally is a Rust CLI that records facts about a git repository's history into a
+DuckDB file and exports metrics over them. This document holds the rules and
+semantics; the code holds the details. The schema is `src/schema.sql`, the
+metrics are `src/metrics.sql`, the queries are `langs/*.scm`, and the fixture
+repository is `tests/fixture.sh`. Where this document and a test disagree, the
+test is wrong or this document is stale: fix one of them.
 
-You are implementing `tally`, a single Rust CLI that records facts about a git
-repository's history into a DuckDB file. Read this whole document before
-writing code. It is the complete brief; nothing outside it is in scope.
+## Design rules
 
-## 1. What tally is
-
-tally records two kinds of facts:
-
-1. **What changed in each commit** along the first-parent history of one branch.
-2. **What each blob contains**: a pure function of file content, parsed once
-   per distinct blob with tree-sitter.
-
-Every metric, aggregate and trend is SQL over those facts. The built-in metrics
-are views in `src/metrics.sql`, which the binary applies at startup (3.1).
-
-### Design rules
-
-These rules decide every question this spec leaves open.
+These decide every question this document leaves open.
 
 - **Every concept is a liability.** Add no table, column, flag, subcommand,
-  config file, trait, or dependency that this spec does not name.
-- **No metrics in Rust.** If something can be computed in SQL from stored
-  facts, it must not be computed in Rust.
-- **Append-only writes.** The only deletion is the version purge in section 5.2.
-- **Idempotent and resumable.** Running `scan` twice changes nothing. An
-  interrupted `scan`, rerun, ends in the same state as an uninterrupted one.
+  file, trait or dependency without a reason that outweighs it.
+- **No metrics in Rust.** Rust records facts and exports views. Anything that
+  can be computed in SQL from stored facts is computed in SQL. The one exception
+  is reachability in the import graph (`cones`, `src/graph.rs`): a transitive
+  closure at every commit is beyond SQL's budget, so Rust derives each file's
+  cone size and SQL computes the metrics from it.
+- **Append-only, idempotent, resumable.** Running `scan` twice changes nothing.
+  An interrupted `scan`, rerun, ends in the same state as an uninterrupted one.
+  The only deletions are the version purge (parse, step 1) and the reset the
+  divergence error prescribes.
+- **Bounded.** Every connection sets `memory_limit` and
+  `max_temp_directory_size` to 4 GB, so a runaway query fails instead of
+  exhausting the machine.
+- **Fail early and loudly.** Assert internal invariants; do not hedge against
+  impossible states.
 - **No hand-rolled parsing or hashing.** Use the named crates.
-- **If the spec is impossible as written, stop and report.** Do not redesign.
 
-### Non-goals
+## Non-goals
 
-Do not build any of these: metric or trend computation in Rust, a config
-file, path include/exclude options, progress bars, SCIP or any semantic analysis, PR gates or a `check` command,
-LLM calls, extra C/C++ preprocessor grammars, rename detection, branches other
-than the one first-parent chain.
+A config file, path include/exclude options, progress bars, SCIP or other
+semantic analysis, PR gates or a `check` command, LLM calls, C/C++
+preprocessing, rename detection, branches other than one first-parent chain.
 
-## 2. CLI
-
-Use `clap` with derive.
+## CLI
 
 ```
 tally scan    [--repo <PATH>] [--db <PATH>] [REV]
-tally metrics [--db <PATH>] [METRIC]...
+tally metrics [--db <PATH>] <OUTPUT> [METRIC]...
 ```
 
-| Argument | Default | Meaning |
-|---|---|---|
-| `--repo` | `.` | Path to a git repository |
-| `--db` | `tally.duckdb` | DuckDB database file; created if missing |
-| `REV` | `HEAD` | Revision whose first-parent history is scanned |
-| `METRIC` | all | Metric views to export (3.1); `--help` lists them with their explanations |
-
-- `scan` runs the walk (5.1), then the parse (5.2). On success it prints one
-  line to stderr: `scanned <N> commits, <M> changes; parsed <K> blobs`.
-- `metrics` prints one JSON object to stdout mapping each selected metric view
-  to an array of row objects. Each row carries the commit `time` (ISO 8601 UTC,
-  `2026-01-01T00:00:00Z`) after `seq`. An empty metric is `[]`. The JSON is
-  built by DuckDB; ad-hoc queries use the `duckdb` CLI on the database file.
+- `--repo` defaults to `.`, `--db` to `tally.duckdb` (created if missing), `REV`
+  to `HEAD`.
+- `scan` runs the walk, then the parse. On success it prints one line to
+  stderr: `scanned <N> commits, <M> changes; parsed <K> blobs`.
+- `metrics` first computes every helper view once, as a temp table shadowing
+  the view for its connection, and rebuilds `cones` from `import_edges`; then it
+  exports. Views and macros are re-applied on open only when the SQL differs
+  from the one the database was last opened with (hash in `tally_sql()`).
+- `metrics` writes one JSON object mapping each selected metric view (all when
+  none is named) to an array of row objects. Each row has `seq`, then the
+  commit `time` (ISO 8601 UTC), then the view's columns; an empty metric is
+  `[]`. `OUTPUT` is a file, written beside the target and renamed into place,
+  or `-` for stdout. An `OUTPUT` that names a metric is rejected. `--help`
+  lists the metrics with their explanations.
 - Logs go to stderr through `tracing`, filtered by `RUST_LOG` (default `info`:
   phases and progress; `debug`: one line per commit and per blob, the blob
   logged before it is parsed).
 - Errors go to stderr with a non-zero exit code.
 
-## 3. Storage
+## Walk
 
-Run this on every start, then `src/metrics.sql` (3.1). It is the whole schema.
+Extends `commits` and `changes`; never reads blob contents.
 
-```sql
-create table if not exists commits (
-  seq integer, id text, time timestamp, author text, message text);
-create table if not exists changes (seq integer, path text, blob text);
-create table if not exists spans (
-  blob text, v integer, lang text, kind text, name text,
-  line integer, end_line integer, tokens integer, comments integer,
-  params integer, hash ubigint, errors integer);
-
-create or replace view files as
-select path, blob, since, until from (
-  select path, blob, seq as since,
-         coalesce(lead(seq) over (partition by path order by seq), 2147483647) as until
-  from changes
-) where blob is not null;
-```
-
-### `commits`: one row per scanned commit
-
-| Column | Meaning |
-|---|---|
-| `seq` | Position on the first-parent chain, oldest = 0, no gaps |
-| `id` | Commit id, 40 hex characters |
-| `time` | Committer time in UTC, as `timestamp` (not `timestamptz`) |
-| `author` | Author as `Name <email>`, lossy UTF-8 |
-| `message` | The full raw commit message, so trailers such as `Co-authored-by` are available |
-
-A database whose `commits` table lacks these columns predates revision 2:
-opening it fails with a message to delete it and scan again.
-
-### `changes`: one row per file whose blob changed in a commit
-
-| Column | Meaning |
-|---|---|
-| `seq` | The commit that made the change |
-| `path` | Repo-relative path, `/` separators, lossy UTF-8 |
-| `blob` | Blob id (40 hex) at `path` after the commit; `NULL` if no blob is there |
-
-### `spans`: parsed facts, keyed by blob
-
-Columns are defined in section 6. A blob has spans if and only if it was
-processed at the current extractor version.
-
-### `files`: view
-
-A file version `(path, blob)` is live at commit `s` when
-`since <= s and s < until`. This view is the only way snapshot queries
-reconstruct a tree.
-
-### 3.1 Metrics
-
-`src/metrics.sql` is embedded with `include_str!` and applied after the schema
-on every start, so every database carries the current definitions and any
-DuckDB client can read them. It defines:
-
-- Helpers: the macros `module(path, depth)` (a path's directory, cut at
-  `depth`) and `live()` (the files live at each commit), and the views
-  `commit_info` (adds `subject`, `is_fix` from a keyword match on the subject,
-  `is_agent` from a co-author trailer or author pattern), `fns` (one row per
-  function with a syntactic `public` flag: Rust `pub`, JS/TS `export`, C/C++
-  not `static`, Python no leading underscore) and `call_edges` (a heuristic
-  call graph per commit: a call resolves only when its name matches exactly
-  one function defined in the repository at that commit).
-- Metrics: every view named `m_<name>`. Each has a `seq` column (the commit,
-  or the first commit of its window) and a `value` column, plus its components.
-  `comment on view` stores what it measures, which direction is better and the
-  evidence behind it.
-
-The rule "no metrics in Rust" still holds: Rust only applies the file and
-exports the views it finds.
-
-## 4. Constants
-
-```rust
-const V: i32 = 2;                    // extractor version
-const MAX_BLOB_BYTES: usize = 1 << 20;
-```
-
-Bump `V` whenever `extract` output could change for any input: a rule change,
-a query file change, or a grammar crate version change.
-
-## 5. `scan`
-
-### 5.1 Walk
-
-Purpose: extend `commits` and `changes`. The walk never reads blob contents.
-
-1. Read the last stored commit: the row of `commits` with the greatest `seq`.
-2. Resolve `REV` to a commit. Collect its first-parent chain, newest first,
-   stopping when you reach the last stored commit id or run out of parents.
-3. If `commits` is non-empty and the last stored id was not reached, fail with:
+1. The stored tip is the `commits` row with the greatest `seq`.
+2. Collect `REV`'s first-parent chain, newest first, stopping at the stored tip
+   or the root. If a tip is stored and was not reached, fail with
    `history diverged from the stored chain; reset the walk with: duckdb <db> "delete from commits; delete from changes" (parsed spans are kept), or delete the database file, then scan again`.
-   Do not touch `spans`.
-4. Process the new commits oldest first. The first new commit gets
-   `seq = last stored seq + 1`, or `0` for an empty database.
-5. For each commit, compare its tree with the previous commit's tree on the
-   chain. For the first commit of an empty database, compare with the empty
-   tree.
+3. Number new commits oldest first, continuing after the stored tip (`seq` 0
+   for an empty database). Store the committer time in UTC as `timestamp`, the
+   author as `Name <email>`, and the full raw message.
+4. Diff each commit's tree against its first parent's (the empty tree for a
+   root). `B(tree, path)` is the blob id at `path` for a regular or executable
+   file, and none otherwise. For every `path` where `B` differs, append
+   `(seq, path, B(cur, path))`, none as `NULL`. So a rename is a `NULL` row
+   plus a new row, a mode-only change has no row, and a merge is compared with
+   its first parent only.
+5. A commit's row and its changes are written in one transaction; one
+   transaction may hold several commits.
 
-Define `B(tree, path)` as the blob id at `path` when the entry is a regular or
-executable file, and *none* otherwise (symlinks, submodules, trees, absent).
-For every `path` where `B(prev, path) != B(cur, path)`, append
-`(seq, path, B(cur, path))` to `changes`, with *none* stored as `NULL`.
+## Parse
 
-Consequences to preserve:
+Makes `spans` complete for every changed blob with a known language.
 
-- A rename appears as one `NULL` row for the old path and one row for the new
-  path. Do not enable rename detection.
-- A mode-only change produces no row.
-- A merge commit is compared with its first parent only.
+1. `delete from spans where v <> V`. Bump `V` (in `src/main.rs`) whenever
+   `extract` output could change: a rule, query file or grammar version change.
+   The next scan then re-parses all history.
+2. List each blob in `changes` without spans, with `min(path)` as its path.
+3. Pick the language from the lowercased extension of that path; skip unknown
+   extensions. A blob over 1 MiB gets one row: kind `file`, line 1, all counts
+   `NULL`. Otherwise store `extract`'s spans.
+4. A blob's rows are written in one transaction; one transaction may hold
+   several blobs. Blobs are read and extracted in parallel and appended by one
+   writer.
 
-6. Insert the `commits` row and that commit's `changes` rows atomically. One
-   transaction may cover several commits, but never part of one.
+Walk and parse are independent, so bumping `V` or adding a language backfills
+history through the parse alone.
 
-Prefer the git library's tree-to-tree diff, which skips unchanged subtrees.
-If it cannot express the rule above, list both trees fully and compare.
+## Extract
 
-### 5.2 Parse
+`extract(lang, src) -> Vec<Span>` parses `src` with the language's grammar,
+runs its query, and returns spans. It is pure; the only global is the memoized
+compiled query per language. It never fails: tree-sitter always returns a tree.
 
-Purpose: make `spans` complete for every blob in `changes` that has a known
-language.
+Captures in a query file:
 
-1. `delete from spans where v <> V`.
-2. List blobs to process:
+- `@comment` marks a comment, `@name` names the span of its match, `@params` is
+  the span's parameter list.
+- A capture starting with `_` is private to the query (for predicates such as
+  `(#eq? @_s "static")`) and creates no span.
+- Any other capture creates a span whose `kind` is the capture name, so
+  `(unsafe_block) @unsafe` needs no Rust change.
 
-```sql
-select blob, min(path) as path from changes
-where blob is not null and blob not in (select blob from spans)
-group by blob;
-```
-
-3. For each `(blob, path)`:
-   - Pick the language from the lowercased extension of `path` (section 7).
-     Unknown extension: skip, write nothing.
-   - Read the blob. If it is larger than `MAX_BLOB_BYTES`, write exactly one
-     row `(blob, V, lang, 'file', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL)`.
-   - Otherwise call `extract(lang, bytes)` and write one row per returned span,
-     with `blob`, `V` and `lang` filled in.
-4. All rows of one blob are written atomically. One transaction may cover
-   several blobs, but never part of one.
-
-Blobs may be read and extracted in parallel (`rayon`), with one writer
-appending whole blobs as they arrive.
-
-Because the two loops are independent, bumping `V` or adding a language
-backfills the whole history through 5.2 alone. Keep that property.
-
-## 6. `extract`
-
-```rust
-pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span>
-```
-
-`extract` is pure: no I/O, same input gives same output. The only global is
-the memoized compiled query per language, which depends on nothing but section 7. It parses
-`src` with the language's grammar, runs the language's query file, and returns
-spans. It never fails; tree-sitter always returns a tree.
-
-### 6.1 Captures
-
-A query file may use any capture names. Three are special:
-
-| Capture | Meaning |
-|---|---|
-| `@comment` | The node is a comment |
-| `@name` | The name of the span captured in the same match |
-| `@params` | The parameter list of the span captured in the same match |
-
-A capture whose name starts with `_` is private to the query: it exists for
-predicates such as `(#eq? @_s "static")` and creates no span.
-
-**Any other capture name creates a span whose `kind` is the capture name.**
-`@fn` and `@import` are ordinary span kinds with no special handling. This is
-the extension point for language-specific facts: adding `(unsafe_block) @unsafe`
-to a query file must work with no Rust change.
-
-Rules:
-
-- Each match contributes at most one span: the first non-special capture.
-- A span's identity is `(kind, start byte, end byte)`. If several matches
-  capture the same span, merge them: the first non-null `@name` and the first
-  non-null `@params` win.
-- Every blob also gets exactly one span of kind `file` covering the whole source.
-
-### 6.2 Span columns
+A match contributes at most one span, its first span capture. A span's identity
+is `(kind, start byte, end byte)`; matches of the same span merge, the first
+non-null `@name` and `@params` winning. Every blob also gets one `file` span.
 
 | Column | Definition |
 |---|---|
-| `kind` | `file` or the capture name |
-| `name` | Text of the `@name` node, lossy UTF-8; `NULL` if none; always `NULL` for `file` |
-| `line` | 1-based line of the span's first byte; `1` for `file` |
-| `end_line` | 1-based line of the span's last byte. If the node ends at column 0, use the previous line. Never less than `line`. |
-| `tokens` | Number of code leaves inside the span |
-| `comments` | Number of whitespace-separated words in `@comment` nodes inside the span |
-| `params` | Named children of the `@params` node that are not `@comment` nodes; `NULL` if no `@params` |
-| `hash` | See 6.3 |
-| `errors` | For `file`: number of nodes where `is_error()` or `is_missing()` is true. `NULL` for other kinds. |
+| `name` | Text of `@name`, lossy UTF-8; `NULL` if none |
+| `line`, `end_line` | 1-based lines of the first and last byte; a span ending at column 0 ends on the previous line; never `end_line < line` |
+| `tokens` | Code leaves inside the span: nodes without children, of non-zero length, not inside a comment |
+| `comments` | Whitespace-separated words of the comments inside the span |
+| `params` | Named children of `@params` that are not comments; `NULL` without `@params` |
+| `hash` | XXH3-64 of the language name, then each code leaf's `kind_id` as `u16` little-endian, in source order |
+| `errors` | For `file`: nodes that are errors or missing; `NULL` otherwise |
+| `start_byte`, `end_byte` | The span's byte range, for containment between spans |
+| `depth` | Spans of the same kind that strictly contain this one |
 
-A **code leaf** is a node with no children and non-zero byte length that is
-not inside a `@comment` node. Named and anonymous leaves both count.
+"Inside" is byte-range containment, so a nested function also counts toward
+its parent and everything counts toward `file`. Identifiers and literals share
+a node kind, so functions differing only in names and literals hash equally.
 
-"Inside" means byte-range containment. A leaf or comment counts toward every
-span that contains it, so a nested function also counts toward its parent, and
-everything counts toward `file`.
+## Metrics
 
-### 6.3 Hash
+`src/metrics.sql` is applied after the schema on every start, so every
+database carries the current definitions and any DuckDB client can read them.
+It starts with the tuning constants (module depth, window, horizons,
+thresholds), then helpers (`path_modules`, `path_roles`, `live`, `versions`,
+`commit_info`, `fns`, `code_changes`, `windows`, `blob_facts`,
+`code_totals`, then the import graph: `import_status`, `graph_files`, `import_edges`,
+`reach`), then the
+metrics.
 
-`hash` is XXH3-64 (crate `xxhash-rust`) over this byte string:
+A metric is a view named `m_<name>` with `seq` (the commit, or the first
+commit of its window) and `value` columns, its components, and a
+`comment on view`: a category, then what it measures, how to read its chart
+and what a trend implies, which direction is better and how strong the evidence
+is. The Grafana dashboard (`grafana/generate.py`) has one panel per metric,
+described by that comment.
 
-```
-lang name as ASCII bytes  ++  for each code leaf in the span, in source order: kind_id as u16 little-endian
-```
+Metrics count production code only (`path_roles`), so the mix of tests and
+vendored code does not drive them. State metrics are computed at every commit.
+Process metrics use a trailing window of `window_commits()` code-touching
+commits read off once per ISO week, so every point has the same sample size;
+each commit weighs the same, commits over `max_commit_files()` files are left
+out as bulk changes, and windows spanning more than `window_max_weeks()` are not
+reported. Metrics over modules report a lift: the
+observed share divided by its chance level for the same module sizes, keeping
+both as components. Size is its own series (`m_size`), never a divisor. No
+metric is validated against defects; validation is a separate study at the level
+of files and commits, with size and churn as covariates and a placebo outcome,
+not a regression on repository-level series.
 
-`lang name` is the name from section 7 (for example `rust`). Identifiers and
-literals share a node kind, so two functions that differ only in names and
-literal values get the same hash. Compute it for every span, including `file`.
+Structure facts are aggregated once per blob (`blob_facts`) and carried to every
+commit and language by change points (`code_totals`); a function's nesting is its
+deepest block minus its body block, so else-if chains stay flat.
 
-### 6.4 Worked example
+Imports resolve to files by each language family's conventions (C with C++,
+the ECMAScript dialects together; family by extension, not by the blob's
+`lang`), in `import_candidates`: C includes next to the includer, else any path
+ending in the include; Python's longest dotted prefix naming a module, relative
+to the package for leading dots; ECMAScript relative specifiers with the usual
+extensions and index files; Rust `crate::`, `self::` and `super::` (inline
+modules included), child modules, and workspace crates by directory name, to the
+longest prefix naming a module file. `mod` declarations are not imports. Among
+candidates alive at a commit the highest rank wins, then the one sharing most
+directories with the importer, then the shallowest; a tie is `ambiguous`.
+`import_status` classifies every import as `resolved`, `ambiguous`, `external`
+(by syntax, resolved to a vendored file, or a quoted C include under a directory
+the repository never had, as from a git submodule) or `unresolved`, as intervals
+that change only when candidate files appear or disappear, and flags `fallback`
+resolutions that matched only a module's own file; `m_import_coverage`
+reports both rates. The graph (`import_edges`) is between production files.
+Files import only files of their own family, so dependency metrics compute per
+family, report each family as a column, and combine them into `value`; the
+import-coupling null rewires imports within a family only. A merged
+header-and-implementation node was tried and dropped: it turned mutual use
+between C files into cycles that dominated propagation cost.
 
-Input, language `rust`:
+Per-commit metrics must not join every commit with every live span: that grows
+with commits times code size. Compute facts once per blob or per file version,
+then add them at a version's `since`, remove them at its `until` (the
+`versions` view), and take a running sum over `commits`; `code_totals` does this
+for every column of `blob_facts`. A value that is not a sum (duplication, which
+depends on how many copies of a structure are live) is tracked per group: each
+change of a group adds its new contribution and removes its old one. Medians and
+maxima are evaluated only at the commits where their inputs change.
 
-```rust
-use std::collections::HashMap;
+## Languages
 
-/// Adds two numbers.
-fn add(a: i32, b: i32) -> i32 {
-    // sum them
-    a + b
-}
-
-impl Foo {
-    fn get(&self) -> i32 { self.x }
-}
-
-fn plus(x: i32, y: i32) -> i32 {
-    x + y
-}
-```
-
-Expected spans, with `tree-sitter-rust` 0.24.2:
-
-| kind | name | line | end_line | tokens | comments | params | errors |
-|---|---|---|---|---|---|---|---|
-| file | NULL | 1 | 15 | 60 | 7 | NULL | 0 |
-| import | `std::collections::HashMap` | 1 | 1 | 7 | 0 | NULL | NULL |
-| fn | `add` | 4 | 7 | 18 | 3 | 2 | NULL |
-| fn | `get` | 10 | 10 | 13 | 0 | 1 | NULL |
-| fn | `plus` | 13 | 15 | 18 | 0 | 2 | NULL |
-
-Also required: `hash(add) == hash(plus)`, and `hash(get)` differs from both.
-The doc comment above `add` lies outside the function node, so it counts
-toward `file` (7 words) but not toward `add` (3 words).
-
-## 7. Languages
-
-One static table maps extensions to a language. A language is a name, a
-grammar, and a query file embedded with `include_str!`.
-
-| Name | Extensions | Grammar crate | Query file |
+| Name | Extensions | Grammar crate | Query |
 |---|---|---|---|
 | `rust` | `rs` | `tree-sitter-rust` | `langs/rust.scm` |
 | `c` | `c` | `tree-sitter-c` | `langs/c.scm` |
@@ -339,353 +212,87 @@ grammar, and a query file embedded with `include_str!`.
 | `tsx` | `tsx` | `tree-sitter-typescript` | `langs/ecma.scm` |
 | `javascript` | `js` `mjs` `cjs` `jsx` | `tree-sitter-javascript` | `langs/ecma.scm` |
 
-`.h` maps to `cpp` on purpose: the C++ grammar parses C headers acceptably,
-and the reverse is not true.
+`.h` is C++ on purpose: the C++ grammar parses C headers acceptably, not the
+reverse. Every query captures functions (`fn`), calls (`call`), imports (one
+`import` span per target path: Rust `use` trees flattened, Python names joined
+to their module), Rust inline modules (`module`),
+comments, visibility where the syntax shows it (`pub` for Rust and JS/TS
+exports, `static` for C/C++; Python's comes from the name, in SQL), and
+control-flow structure: `branch` (if, loops, match and case arms, catch,
+ternaries), `condition` (`&&`, `||`, `and`, `or`, `??`), `block` (for nesting),
+`global_state` (Rust `static mut`, C/C++ file-scope non-const variables, Python
+`global`/`nonlocal`, JS/TS module-level `let`/`var`), `throw` (throw, raise,
+Rust panics, `unwrap` and `expect`, C `longjmp`) and `goto` (C/C++). Adding a
+language takes one grammar crate, one row in `LANGS`, one query file and one
+golden test.
 
-Adding a language must require only: one grammar dependency, one row in this
-table, one query file, one golden test.
+## Accepted quirks
 
-### Query files
-
-Use these verbatim. They were validated against the grammar versions below by
-compiling each query and checking the output on sample code.
-
-`langs/rust.scm`
-
-```scheme
-(function_item name: (identifier) @name parameters: (parameters) @params) @fn
-[(line_comment) (block_comment)] @comment
-(use_declaration argument: (_) @name) @import
-(call_expression function: [(identifier) @name (scoped_identifier name: (identifier) @name) (field_expression field: (field_identifier) @name) (generic_function function: [(identifier) @name (scoped_identifier name: (identifier) @name) (field_expression field: (field_identifier) @name)])]) @call
-(function_item (visibility_modifier)) @pub
-```
-
-`langs/c.scm`
-
-```scheme
-(function_definition) @fn
-(function_definition declarator: (function_declarator declarator: (identifier) @name parameters: (parameter_list) @params)) @fn
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name parameters: (parameter_list) @params))) @fn
-(comment) @comment
-(preproc_include path: (_) @name) @import
-(call_expression function: (identifier) @name) @call
-(function_definition (storage_class_specifier) @_s (#eq? @_s "static")) @static
-```
-
-`langs/cpp.scm`
-
-```scheme
-(function_definition) @fn
-(function_definition declarator: (function_declarator declarator: (_) @name parameters: (parameter_list) @params)) @fn
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (_) @name parameters: (parameter_list) @params))) @fn
-(function_definition declarator: (reference_declarator (function_declarator declarator: (_) @name parameters: (parameter_list) @params))) @fn
-(comment) @comment
-(preproc_include path: (_) @name) @import
-(call_expression function: [(identifier) @name (qualified_identifier name: (identifier) @name) (field_expression field: (field_identifier) @name)]) @call
-(function_definition (storage_class_specifier) @_s (#eq? @_s "static")) @static
-```
-
-`langs/python.scm`
-
-```scheme
-(function_definition name: (identifier) @name parameters: (parameters) @params) @fn
-(comment) @comment
-(import_statement name: (_) @name) @import
-(import_from_statement module_name: (_) @name) @import
-(call function: [(identifier) @name (attribute attribute: (identifier) @name)]) @call
-```
-
-Python visibility comes from the leading underscore, in SQL (`fns`).
-
-`langs/ecma.scm` (shared by `typescript`, `tsx`, `javascript`)
-
-```scheme
-(function_declaration name: (identifier) @name parameters: (formal_parameters) @params) @fn
-(generator_function_declaration name: (identifier) @name parameters: (formal_parameters) @params) @fn
-(method_definition name: (_) @name parameters: (formal_parameters) @params) @fn
-(variable_declarator name: (identifier) @name value: (arrow_function)) @fn
-(variable_declarator name: (identifier) @name value: (arrow_function parameters: (formal_parameters) @params)) @fn
-(variable_declarator name: (identifier) @name value: (function_expression parameters: (formal_parameters) @params)) @fn
-(comment) @comment
-(import_statement source: (string) @name) @import
-(call_expression function: [(identifier) @name (member_expression property: (property_identifier) @name)]) @call
-(export_statement declaration: (function_declaration) @pub)
-(export_statement declaration: (generator_function_declaration) @pub)
-(export_statement declaration: (lexical_declaration (variable_declarator value: [(arrow_function) (function_expression)]) @pub))
-```
-
-`@call` spans dominate the table (about four in five rows). Each span finds its
-leaves by binary search over the ordered leaves, never by scanning all spans
-per leaf.
-
-Validated with: `tree-sitter` 0.26.1, `tree-sitter-rust` 0.24.2,
-`tree-sitter-c` 0.24.2, `tree-sitter-cpp` 0.23.4, `tree-sitter-python` 0.25.0,
-`tree-sitter-typescript` 0.23.2, `tree-sitter-javascript` 0.25.0. Pin the Rust
-crates to these versions if they exist; otherwise use the nearest and let the
-tests in section 9 tell you what changed.
-
-### Accepted quirks
-
-These are known and intended for the MVP. Do not fix them.
-
-- C/C++ `f(void)` reports `params = 1`.
-- A JS/TS arrow function with one bare parameter (`x => x`) reports `params = NULL`.
+- C/C++ `f(void)` reports `params = 1`; a JS/TS arrow function with one bare
+  parameter reports `params = NULL`.
 - Anonymous functions passed as arguments are not spans; their tokens count
-  toward the enclosing span.
-- Python docstrings are strings, not comments.
-- `import a, b` in Python yields one import span named `a`.
-- C/C++ macros that expand to syntax cause local misparses. They show up in
+  toward the enclosing span. Python docstrings are strings, not comments.
+- Import resolution is heuristic: C include paths are guessed by suffix, Python
+  roots by suffix, Rust crate names by directory name (a crate renamed in its
+  `Cargo.toml` is external), and ECMAScript bare specifiers are external even
+  for workspace packages. Rust paths used without `use` and `#[path]` modules
+  are not seen. Re-exports are not followed: an import of an item a Rust crate
+  root or an `index.ts` re-exports is an edge to that root, so roots reach much
+  of their crate (`fallback` counts the Rust and Python cases).
+- C/C++ macros that expand to syntax cause local misparses, visible in
   `errors`; they never fail a run.
 - A blob reachable under two extensions is parsed once, by `min(path)`.
 - Visibility is syntactic: a Rust `pub` (including `pub(crate)`) inside a
-  private module counts as public.
-- Call resolution in `call_edges` is by name only; most calls do not resolve.
+  private module is public.
+- Calls are recorded as facts but resolved by nothing: by bare name they would
+  match across languages and receivers, so the import graph stands in for them.
+- Roles follow path conventions: tests inside source files (Rust
+  `#[cfg(test)]`) count as production code, and a `deps/` or `external/`
+  directory of first-party code counts as vendored.
+- A path's module is its nearest directory that held a `Cargo.toml`,
+  `package.json` or `pyproject.toml` at any commit (the repository root never
+  counts), else its directory at a fixed depth. C/C++ has no manifest, so its
+  modules are directories; incidental manifests (test fixtures, examples) make
+  small modules.
+- Windowed series report the window's first commit, and the newest window is
+  partial until it fills.
 
-## 8. Project
+## Tests
 
-```
-Cargo.toml
-src/main.rs      clap CLI, schema setup, walk, parse loop
-src/extract.rs   Lang table, Span, extract
-src/metrics.rs   metric catalog and JSON export
-src/schema.sql   section 3, embedded with include_str!
-src/metrics.sql  section 3.1, embedded with include_str!
-langs/*.scm      section 7
-grafana/         Infinity data source and dashboard provisioning
-flake.nix        dev shell: toolchain, duckdb CLI, `tally-grafana`
-tests/           section 9
-README.md        section 10
-```
+`cargo test`, `cargo clippy --all-targets -- -D warnings` and
+`cargo fmt --check` pass. Tests come in three layers:
 
-Dependencies, and no others without a stated reason:
+- `tests/extract.rs`: `extract` on source text: the worked example (token
+  counts tied to the grammar versions in `Cargo.lock`), one golden test per
+  language covering functions, calls, imports, comments and visibility, empty
+  and broken input, and purity.
+- `tests/scan.rs`: the walk and the parse on git repositories written in process
+  with gix (`tests/common`). One test runs `tests/fixture.sh` with real git and
+  requires the same commit ids, so the in-process fixture is the spec's; it is
+  the only test that needs `git`. The others pin exact `commits`, `changes`,
+  `files` and `spans`, idempotence, incremental scans, version bumps,
+  divergence, oversized blobs, refusing old databases, modules and roles of conventional paths,
+  import resolution in every language family over time, and squashing.
+- `tests/metrics.rs`: hand-checked metric values and the `seq`/`value` contract
+  on the fixture, the JSON export, the dashboard matching the views, renaming
+  invariance, and properties on synthetic facts written straight into the
+  database (no git): lifts are 1 under a null of thousands of commits at 5, 50 and
+  200 modules, import coupling is 1 under random rewiring (hubs included),
+  dependency metrics on a small graph by hand, and later commits never rewrite
+  past windows. `src/graph.rs` checks its cones against breadth-first search.
+
+## Dependencies
 
 | Crate | Use |
 |---|---|
 | `clap` (derive, string) | CLI; `string` lets `--help` list metrics read from the catalog |
 | `gix` | Repository access, first-parent walk, tree diff, blob read |
 | `tree-sitter` + six grammar crates | Parsing and queries |
-| `duckdb` (features `bundled`, `json`) | Storage, SQL and the JSON export |
+| `duckdb` (bundled, json) | Storage, SQL and the JSON export |
+| `xxhash-rust` (xxh3) | Span hash |
 | `rayon` | Parallel blob extraction |
 | `tracing`, `tracing-subscriber` (env-filter) | Logging |
-| `xxhash-rust` (feature `xxh3`) | Span hash |
 | `anyhow` | Error propagation |
 
-Dev-dependencies: `tempfile`; `insta` is allowed for golden tests.
-
-Rust stable, current edition. `cargo clippy -- -D warnings` and `cargo fmt
---check` must pass. Target size is about 550 lines of Rust; treat a much larger
-result as a sign that something out of scope crept in.
-
-## 9. Tests
-
-All tests must pass with `cargo test`. Tests may shell out to `git`.
-
-### 9.1 Queries compile
-
-For every language in the table, the query compiles against its grammar.
-
-### 9.2 `extract` golden tests
-
-- The worked example in 6.4, exactly.
-- At least one sample per language covering: a named function with
-  parameters, a comment, an import, and for C a pointer-returning function.
-- Empty input returns exactly one `file` span with `line = 1`, `end_line = 1`,
-  `tokens = 0`, `errors = 0`.
-- Broken input (for example `int f( {{{ ` as C) returns a `file` span with
-  `errors >= 1` and does not panic.
-- Purity: calling `extract` twice on the same input returns equal output.
-
-### 9.3 Fixture repository
-
-Build this repository in a temp directory at test time:
-
-```bash
-git init -q -b main . && git config user.email t@t && git config user.name t
-export GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"
-printf '# readme\n' > README.md
-printf 'fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n' > a.rs
-git add -A && git commit -qm c0
-export GIT_AUTHOR_DATE="2026-01-02T00:00:00Z" GIT_COMMITTER_DATE="2026-01-02T00:00:00Z"
-printf 'fn add(a: i32, b: i32) -> i32 {\n    // sum\n    a + b\n}\n' > a.rs
-mkdir src && printf 'fn plus(x: i32, y: i32) -> i32 {\n    x + y\n}\n' > src/b.rs
-git add -A && git commit -qm c1
-export GIT_AUTHOR_DATE="2026-01-03T00:00:00Z" GIT_COMMITTER_DATE="2026-01-03T00:00:00Z"
-git mv src/b.rs src/c.rs && git rm -q README.md && git commit -qm c2
-git checkout -q -b side
-export GIT_AUTHOR_DATE="2026-01-04T00:00:00Z" GIT_COMMITTER_DATE="2026-01-04T00:00:00Z"
-printf 'fn d() {}\n' > d.rs && git add -A && git commit -qm s1
-printf 'fn d() -> i32 { 1 }\n' > d.rs && git add -A && git commit -qm s2
-git checkout -q main
-export GIT_AUTHOR_DATE="2026-01-05T00:00:00Z" GIT_COMMITTER_DATE="2026-01-05T00:00:00Z"
-git merge -q --no-ff side -m merge
-```
-
-After `tally scan`:
-
-`commits` has 4 rows, `seq` 0 to 3, with times 2026-01-01, 01-02, 01-03 and
-01-05 at 00:00:00. The two side-branch commits are absent.
-
-`changes` has exactly these 8 rows:
-
-| seq | path | blob |
-|---|---|---|
-| 0 | `README.md` | blob of the readme |
-| 0 | `a.rs` | blob of `a.rs` version 1 |
-| 1 | `a.rs` | blob of `a.rs` version 2 |
-| 1 | `src/b.rs` | blob of `plus` |
-| 2 | `README.md` | NULL |
-| 2 | `src/b.rs` | NULL |
-| 2 | `src/c.rs` | blob of `plus` (same id as seq 1) |
-| 3 | `d.rs` | blob of `d.rs` final version |
-
-`files` has exactly these 6 rows:
-
-| path | since | until |
-|---|---|---|
-| `README.md` | 0 | 2 |
-| `a.rs` | 0 | 1 |
-| `a.rs` | 1 | 2147483647 |
-| `d.rs` | 3 | 2147483647 |
-| `src/b.rs` | 1 | 2 |
-| `src/c.rs` | 2 | 2147483647 |
-
-`spans` has 8 rows: one `file` and one `fn` for each of the 4 Rust blobs. The
-readme has none. Both versions of `a.rs` report `tokens = 18` for `add`; only
-version 2 reports `comments = 2`. That equality is the point: comments and
-whitespace do not change `tokens`.
-
-### 9.4 Behavior tests on the fixture
-
-- **Idempotence.** A second `scan` leaves all three row counts unchanged.
-- **Incremental.** Scan at `c1`, then scan at `main`. The database equals a
-  fresh single scan of `main`.
-- **Resume.** Call the walk alone, then run a full `scan`. The database
-  equals a fresh single scan.
-- **Version bump.** With spans present, change the stored `v` of all rows to a
-  different number, then `scan`. All spans are rebuilt at `V`; `commits` and
-  `changes` are untouched.
-- **Divergence.** Scan `main`, then scan `side`. The stored tip (the merge
-  commit) is not on `side`'s first-parent chain, so the command fails with the
-  message from 5.1 and changes nothing.
-- **Oversized blob.** A file larger than `MAX_BLOB_BYTES` with a known
-  extension yields exactly one `file` span with `tokens` NULL.
-- **`metrics`.** Selected metrics export as exact JSON on the fixture, all
-  metrics export by default in definition order, an unknown name fails.
-
-### 9.5 Metric views
-
-On the fixture: the helper views return the expected rows; `m_locality`,
-`m_hidden_coupling`, `m_interface_bloat`, `m_encapsulation` and `m_naming`
-return hand-checked values; every `m_*` view has `seq` and `value`. The Grafana
-dashboard has one panel per metric view, described by the view's comment, and
-no series for a view that does not exist.
-
-## 10. README
-
-The README contains a two-paragraph description, the CLI usage, the schema
-with column meanings, the metrics, and how to view them in Grafana. The MVP's
-cookbook queries, kept here for reference, were validated on the fixture:
-
-Change locality, per commit:
-
-```sql
-select seq, count(*) as files, count(distinct split_part(path, '/', 1)) as roots
-from changes group by seq order by seq;
-```
-
-Fixture result: `(0,2,2) (1,2,2) (2,3,2) (3,1,1)`.
-
-Size over time:
-
-```sql
-select c.seq, count(*) as files, sum(s.tokens) as tokens, sum(s.comments) as comment_words
-from commits c
-join files f on c.seq >= f.since and c.seq < f.until
-join spans s on s.blob = f.blob and s.kind = 'file'
-group by c.seq order by c.seq;
-```
-
-Fixture result: `(0,1,18,0) (1,2,36,2) (2,2,36,2) (3,3,45,2)`.
-
-Function size and parameter distribution:
-
-```sql
-select c.seq, count(*) as fns, quantile_cont(s.tokens, 0.9) as tokens_p90, max(s.params) as params_max
-from commits c
-join files f on c.seq >= f.since and c.seq < f.until
-join spans s on s.blob = f.blob and s.kind = 'fn'
-group by c.seq order by c.seq;
-```
-
-Duplicated-function ratio (the token threshold is the user's choice; real
-repositories should use 50 or more):
-
-```sql
-with live as (
-  select c.seq, s.hash, s.tokens
-  from commits c
-  join files f on c.seq >= f.since and c.seq < f.until
-  join spans s on s.blob = f.blob and s.kind = 'fn' and s.tokens >= 10
-), g as (select seq, hash, sum(tokens) as t, count(*) as n from live group by seq, hash)
-select seq, coalesce(sum(t) filter (n > 1), 0) / sum(t) as dup_ratio
-from g group by seq order by seq;
-```
-
-Fixture result: `(0,0.0) (1,1.0) (2,1.0) (3,1.0)`.
-
-Hotspots:
-
-```sql
-select path, count(*) as changes from changes group by path order by changes desc, path limit 20;
-```
-
-Largest functions at the latest commit:
-
-```sql
-select f.path, s.name, s.line, s.tokens
-from files f join spans s on s.blob = f.blob and s.kind = 'fn'
-where (select max(seq) from commits) >= f.since and (select max(seq) from commits) < f.until
-order by s.tokens desc limit 20;
-```
-
-## 11. Build order
-
-1. `extract` with the tests in 9.1 and 9.2. Do not continue until they pass.
-2. Schema setup and the walk, with the `commits`, `changes` and `files`
-   expectations in 9.3.
-3. The parse loop, with the `spans` expectations in 9.3.
-4. `metrics`.
-5. The behavior tests in 9.4 and the metric tests in 9.5.
-6. README.
-
-## 12. Verify, don't assume
-
-This spec was validated with a prototype in another language, so the
-semantics, SQL and query files are known to work. The Rust API details below
-are not verified. Check each against current crate documentation.
-
-- **gix:** walking only first parents; a tree-to-tree diff with rename
-  tracking off; an empty tree to diff the root commit against; reading a blob
-  by id; resolving `REV`.
-- **tree-sitter:** how the grammar crates expose their language (the
-  TypeScript crate exposes two); the iterator type that query matches return
-  in the pinned version; `kind_id`, `is_error`, `is_missing`.
-- **duckdb:** how the Appender interacts with explicit transactions, since
-  5.1 and 5.2 require atomic groups of rows; writing a `u64` into `ubigint`;
-  storing the commit time as a plain `timestamp` (the prototype used
-  `make_timestamp(<epoch seconds> * 1000000)`); printing query results as a
-  table through the Arrow re-export. The bundled build lacks the ICU
-  extension, so avoid `timestamptz` and any function that needs ICU.
-- **Token counts** in 6.4 and 9.3 are tied to the grammar versions in section
-  7. If a pinned version differs and a count changes, confirm the cause, then
-  update the expectation deliberately. Never loosen a test to make it pass.
-
-## 13. Done means
-
-- `cargo test`, `cargo clippy -- -D warnings` and `cargo fmt --check` pass.
-- `tally scan` on the fixture produces exactly the tables in 9.3.
-- `tally scan` on tally's own repository completes, and a second run reports
-  `scanned 0 commits, 0 changes; parsed 0 blobs`.
-- Nothing listed under Non-goals exists in the code.
-- A short note lists every place the implementation deviates from this spec
-  and why. An empty list is the expected outcome.
+Dev-dependency: `tempfile`. The Nix flake provides the toolchain
+(`rust-toolchain.toml`), the `duckdb` CLI and `tally-grafana`.

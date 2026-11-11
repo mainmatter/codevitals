@@ -3,3 +3,4 @@ target
 /*.duckdb
 /*.duckdb.wal
 /metrics.json
+.DS_Store
