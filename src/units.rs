@@ -22,7 +22,7 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?,
     };
-    crate::metrics::cache_helpers(db)?;
+    crate::metrics::cache_helpers(db, &["units.files".into(), "units.functions".into()])?;
     let rows = |view: &str, order: &str| -> Result<String> {
         Ok(db.query_row(
             &format!(
@@ -44,7 +44,7 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
 /// The `top` hotspots at the newest scanned commit (`units.hotspots`), as JSON
 /// (`{"seq":..,"id":..,"days":..,"validated":false,"files":[..]}`) or as text.
 pub fn hotspots(db: &mut Connection, top: usize, json: bool) -> Result<String> {
-    crate::metrics::cache_helpers(db)?;
+    crate::metrics::cache_helpers(db, &["units.hotspots".into()])?;
     let (seq, id, days): (i32, String, i32) = db.query_row(
         "select seq, id, hotspot_days() from commits order by seq desc limit 1",
         [],

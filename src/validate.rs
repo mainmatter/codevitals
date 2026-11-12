@@ -184,7 +184,7 @@ const FIX_RECALL: &str =
 
 /// Loads the labels file into a temp table and computes the report.
 pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
-    crate::metrics::cache_helpers(db)?;
+    crate::metrics::cache_helpers(db, &["function_facts".into(), "units.defect_windows".into()])?;
     db.execute_batch("create or replace temp table all_labels as select * from labels limit 0")?;
     let labels = crate::labels::load(db, file, "all_labels")?;
     // Each label's two functions with their metrics (any declared test features: the

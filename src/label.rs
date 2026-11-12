@@ -232,7 +232,7 @@ pub fn run(repo: &gix::Repository, db: &mut Connection, file: &Path) -> Result<u
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    crate::metrics::cache_helpers(db)?;
+    crate::metrics::cache_helpers(db, &["units.functions".into(), "author_file_commits".into()])?;
     let candidates: Vec<Candidate> = db
         .prepare(
             "select path, lineage, lang, blob, start_byte, end_byte, line, tokens from units.functions

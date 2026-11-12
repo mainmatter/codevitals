@@ -197,7 +197,9 @@ pub fn diff(
     let parsed = crate::parse::parse(&mut db, repo)?;
     info!(reused, parsed, "blobs");
     // Materializes the helper views once for every metric, deriving the cones too.
-    crate::metrics::cache_helpers(&mut db)?;
+    let mut roots: Vec<String> = crate::metrics::list(&db)?.iter().map(|m| format!("metrics.{m}")).collect();
+    roots.extend(["units.files".into(), "units.functions".into()]);
+    crate::metrics::cache_helpers(&mut db, &roots)?;
 
     let mut changes = Vec::new();
     db.execute_batch(UNIT_ROWS)?;
