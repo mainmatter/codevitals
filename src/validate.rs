@@ -59,6 +59,7 @@ pub struct Agreement {
 }
 
 pub struct Report {
+    pub defects: Defects,
     pub labels: usize,
     pub decided: usize,
     pub unknown: usize,
@@ -67,6 +68,119 @@ pub struct Report {
     pub between: Option<Agreement>,
     pub kappa: Option<f64>,
 }
+
+/// Rankings of files the defect check compares: columns of `units.defect_windows`;
+/// random (a fixed pseudo-random order), tokens (size) and changes are the baselines.
+pub const RANKINGS: &[&str] = &[
+    "random",
+    "tokens",
+    "changes",
+    "decisions",
+    "max_decisions",
+    "max_nesting",
+    "max_params",
+    "throws",
+    "unhandled",
+    "invariants",
+    "global_state",
+    "hotspot",
+];
+
+const BASELINES: &[&str] = &["random", "tokens", "changes"];
+
+/// Share of tokens inspected, in ranking order, at which fixes found are counted.
+const EFFORT: f64 = 0.2;
+
+/// The defect check: per ranking, the share of next-window fix touches in the files
+/// that make up the top EFFORT of tokens, over every cut (pooled) and on average.
+pub struct Defects {
+    pub cuts: usize,
+    pub window_days: i64,
+    pub fixes: i64,
+    /// Ranking, pooled share, mean share over cuts with fixes.
+    pub found: Vec<(String, f64, f64)>,
+}
+
+/// A file at a cut: its lineage's hash (the tie order), tokens, fixes after the cut,
+/// and its value per ranking.
+type CutFile = (u64, f64, i64, Vec<f64>);
+
+fn defects(db: &Connection) -> Result<Defects> {
+    let window_days: i64 = db.query_row("select defect_window_days()", [], |r| r.get(0))?;
+    let query = format!(
+        "select k, lineage, tokens, fixes, {} from units.defect_windows order by k",
+        RANKINGS.join(", ")
+    );
+    // Per cut: (lineage, tokens, fixes, values per ranking).
+    let mut cuts: Vec<Vec<CutFile>> = Vec::new();
+    let mut last = None;
+    let mut stmt = db.prepare(&query)?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let k: i64 = r.get(0)?;
+        if last != Some(k) {
+            cuts.push(Vec::new());
+            last = Some(k);
+        }
+        let lineage: String = r.get(1)?;
+        let values = (0..RANKINGS.len())
+            .map(|i| r.get::<_, Option<f64>>(4 + i).map(|v| v.unwrap_or(0.0)))
+            .collect::<duckdb::Result<_>>()?;
+        cuts.last_mut().expect("pushed").push((
+            xxh3_64(lineage.as_bytes()),
+            r.get(2)?,
+            r.get(3)?,
+            values,
+        ));
+    }
+    let fixes: i64 = cuts.iter().flatten().map(|f| f.2).sum();
+    let found = (0..RANKINGS.len())
+        .map(|i| {
+            let (mut hit, mut total, mut shares) = (0i64, 0i64, Vec::new());
+            for files in &cuts {
+                let mut order: Vec<&CutFile> = files.iter().collect();
+                // Highest first; ties in a fixed pseudo-random order.
+                order.sort_by(|a, b| b.3[i].total_cmp(&a.3[i]).then(a.0.cmp(&b.0)));
+                let tokens: f64 = files.iter().map(|f| f.1).sum();
+                let (mut seen, mut found) = (0.0, 0i64);
+                for f in order {
+                    if seen >= EFFORT * tokens {
+                        break;
+                    }
+                    seen += f.1;
+                    found += f.2;
+                }
+                let all: i64 = files.iter().map(|f| f.2).sum();
+                hit += found;
+                total += all;
+                if all > 0 {
+                    shares.push(found as f64 / all as f64);
+                }
+            }
+            let pooled = if total > 0 {
+                hit as f64 / total as f64
+            } else {
+                f64::NAN
+            };
+            let mean = if shares.is_empty() {
+                f64::NAN
+            } else {
+                shares.iter().sum::<f64>() / shares.len() as f64
+            };
+            (RANKINGS[i].to_owned(), pooled, mean)
+        })
+        .collect();
+    Ok(Defects {
+        cuts: cuts.len(),
+        window_days,
+        fixes,
+        found,
+    })
+}
+
+/// The caveat the defect check always states.
+const FIX_RECALL: &str =
+    "is_fix finds fixes by commit subject; its recall may be as low as 0.6 (validation/README.md)";
 
 /// Loads the labels file into a temp table and computes the report.
 pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
@@ -123,7 +237,9 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
     drop(stmt);
     let metrics = (0..METRICS.len()).map(|i| support(&judgments, i)).collect();
     let (self_agreement, between, kappa) = agreement(db)?;
+    let defects = defects(db)?;
     Ok(Report {
+        defects,
         labels,
         decided,
         unknown,
@@ -346,6 +462,33 @@ fn num(v: f64) -> String {
 
 impl Report {
     pub fn json(&self) -> String {
+        let d = &self.defects;
+        let found: Vec<String> = d
+            .found
+            .iter()
+            .map(|(r, pooled, mean)| {
+                format!(
+                    "{{\"ranking\":\"{r}\",\"baseline\":{},\"found\":{},\"mean\":{}}}",
+                    BASELINES.contains(&r.as_str()),
+                    num(*pooled),
+                    num(*mean)
+                )
+            })
+            .collect();
+        let defects = format!(
+            "{{\"cuts\":{},\"window_days\":{},\"effort\":{EFFORT},\"fixes\":{},\"rankings\":[{}],\"caveat\":\"{FIX_RECALL}\"}}",
+            d.cuts,
+            d.window_days,
+            d.fixes,
+            found.join(",")
+        );
+        format!(
+            "{{\"defects\":{defects},\"labels\":{}}}",
+            self.labels_json()
+        )
+    }
+
+    fn labels_json(&self) -> String {
         let metrics: Vec<String> = self
             .metrics
             .iter()
@@ -375,7 +518,7 @@ impl Report {
         };
         let selfs: Vec<String> = self.self_agreement.iter().map(agreement).collect();
         format!(
-            "{{\"labels\":{},\"decided\":{},\"unknown_functions\":{},\"metrics\":[{}],\"self_agreement\":[{}],\"between_raters\":{},\"kappa\":{}}}",
+            "{{\"count\":{},\"decided\":{},\"unknown_functions\":{},\"metrics\":[{}],\"self_agreement\":[{}],\"between_raters\":{},\"kappa\":{}}}",
             self.labels,
             self.decided,
             self.unknown,
@@ -390,6 +533,31 @@ impl Report {
     }
 
     pub fn text(&self) -> String {
+        let d = &self.defects;
+        let mut out = format!(
+            "defects: {} cuts of {} days, {} fix touches in the window after a cut\n\
+             share of them in the files ranked first that hold {:.0}% of the tokens (pooled, mean over cuts)\n",
+            d.cuts,
+            d.window_days,
+            d.fixes,
+            100.0 * EFFORT
+        );
+        for (r, pooled, mean) in &d.found {
+            let base = if BASELINES.contains(&r.as_str()) {
+                "  baseline"
+            } else {
+                ""
+            };
+            writeln!(out, "  {r:<14} {pooled:>5.3}  {mean:>5.3}{base}").expect("write to String");
+        }
+        writeln!(out, "  {FIX_RECALL}\n").expect("write to String");
+        out + &self.labels_text()
+    }
+
+    fn labels_text(&self) -> String {
+        if self.labels == 0 {
+            return "labels: none yet; judge pairs with `cv label`\n".into();
+        }
         let mut out = format!(
             "{} labels, {} decided (left or right){}\n\n",
             self.labels,

@@ -11,6 +11,7 @@ create or replace macro deep_nesting() as 3;    -- functions nested deeper than 
 create or replace macro many_decisions() as 10;  -- functions with more decision points count as branchy
 create or replace macro many_params() as 5;      -- functions with more parameters count as wide
 create or replace macro hotspot_days() as 365; -- trailing period whose changes hotspots count
+create or replace macro defect_window_days() as 182; -- windows of the defect check in cv validate
 -- Cargo features whose code counts as test code by name alone (more may be declared
 -- per path in .gitattributes: codevitals-test-features=a,b).
 create or replace macro test_feature(f) as
@@ -406,3 +407,27 @@ select seq, min(value) filter (cumulative >= 0.9 * functions) as p90, max(value)
        coalesce(sum(t) filter (value > threshold), 0) / any_value(tokens) as share,
        any_value(functions) as functions
 from c group by seq;
+
+-- Commits with derived labels. is_fix: a defect fix in production behaviour: a fix
+-- keyword or a defect word in the subject, production code touched, and no sign of a
+-- test, CI, docs or lint fix. Checked on 150 hand-labelled RediSearch commits
+-- (validation/README.md): precision 0.86, recall 0.89 (but possibly as low as 0.6),
+-- against 0.48 and 0.89 for the keyword alone (is_fix_keyword). is_agent: a co-author
+-- trailer names a coding agent; in squash merges it means an agent helped somewhere.
+create or replace view commit_info as
+with production as (
+  select seq, count(*) as files from code_changes group by seq),
+c as (
+  select c.*, a.name || ' <' || a.email || '>' as author, a.is_bot,
+         split_part(c.message, chr(10), 1) as subject, coalesce(p.files, 0) as production_files
+  from commits c join authors a using (seq) left join production p using (seq))
+select seq, id, time, author, message, subject, production_files,
+  (regexp_matches(subject, '(?i)\b(fix|fixes|fixed|bug|hotfix|regression|revert)')
+     or regexp_matches(subject, '(?i)(crash|leak|race\b|deadlock|hang|segfault|overflow|corrupt|wrong|incorrect|asan|use.after.free|double.free|null.pointer|panic)'))
+    and production_files > 0
+    and not regexp_matches(subject, '(?i)(test|flak|\bci\b|lint|typo|\bdocs?\b|readme|cmake|\bbuild\b|review|indent|format|chore|contributing|\blink)')
+    as is_fix,
+  regexp_matches(subject, '(?i)\b(fix|fixes|fixed|bug|hotfix|regression|revert)') as is_fix_keyword,
+  regexp_matches(message, '(?i)co-authored-by:.*(claude|copilot|cursor|codex|devin|aider)') as is_agent,
+  is_bot
+from c;

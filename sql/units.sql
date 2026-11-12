@@ -44,3 +44,38 @@ select l.path, l.lineage, coalesce(r.changes, 0) as changes, l.decisions, l.toke
 from live l left join recent r using (lineage);
 
 comment on view units.hotspots is 'Live production files ranked by changes in the trailing hotspot_days() (commits of at most max_commit_files() files; renames keep a file''s count) times their decision points: score = changes * decisions. Unvalidated.';
+
+-- The defect check of `cv validate`: history cut into consecutive windows of
+-- defect_window_days(); at each cut, every live production file with its static
+-- values, its changes in the window before, and the fix commits (commit_info.is_fix)
+-- that touch it in the window after. A cut needs a full window on both sides.
+create or replace view units.defect_windows as
+with bounds as (select min(time) as first, max(time) as last from commit_times),
+cuts as (
+  select k, b.first + to_days(k * defect_window_days()) as cut
+  from bounds b, range(1, 1000) r(k)
+  where b.first + to_days((k + 1) * defect_window_days()) <= b.last),
+snap as (
+  select c.k, c.cut, max(t.seq) as seq from cuts c join commit_times t on t.time <= c.cut group by all),
+live as (
+  select s.k, s.cut, f.* from snap s join units.files f on f.since <= s.seq and s.seq < f.until),
+fns as (
+  select s.k, u.lineage, max(u.decisions) as max_decisions, max(u.nesting) as max_nesting,
+         max(u.params) as max_params
+  from snap s join units.functions u on u.since <= s.seq and s.seq < u.until group by all),
+touches as (
+  select x.lineage, t.time, c.is_fix
+  from code_changes x join commit_times t using (seq) join commit_info c using (seq)
+  where x.blob is not null),
+counted as (
+  select l.k, l.lineage,
+         count(*) filter (t.time > l.cut - to_days(defect_window_days()) and t.time <= l.cut) as changes,
+         count(*) filter (t.is_fix and t.time > l.cut and t.time <= l.cut + to_days(defect_window_days())) as fixes
+  from live l left join touches t using (lineage) group by all)
+select l.k, l.cut, l.path, l.lineage, l.tokens, c.changes, c.fixes, l.decisions,
+       coalesce(f.max_decisions, 0) as max_decisions, coalesce(f.max_nesting, 0) as max_nesting,
+       coalesce(f.max_params, 0) as max_params, l.throws, l.unhandled, l.invariants, l.global_state,
+       c.changes * l.decisions as hotspot, 0 as random
+from live l join counted c using (k, lineage) left join fns f using (k, lineage);
+
+comment on view units.defect_windows is 'Per cut of history (k, every defect_window_days()) and live production file: static values (tokens, decisions, max_decisions, max_nesting, max_params, throws, unhandled, invariants, global_state), changes in the window before the cut, hotspot (changes * decisions), random (0: ranks files in a fixed pseudo-random order), and fixes: fix commits (commit_info.is_fix) touching the file in the window after.';

@@ -114,3 +114,48 @@ fn a_metric_raters_follow_is_supported() {
     };
     assert_eq!(decisions.ends_with("yes"), tokens_share < 0.9, "{text}");
 }
+
+/// The defect check: at a cut, files ranked by each metric, and the share of the
+/// next window's fixes in the files that hold the first 20% of tokens.
+#[test]
+fn defects_after_a_cut() {
+    let mut r = Repo::new();
+    let big: String = (0..4)
+        .map(|i| format!("fn b{i}(x: i32) -> i32 {{ x + {i} }}\n"))
+        .collect();
+    r.write(
+        "a.rs",
+        "fn a(x: i32) -> i32 { if x > 0 { 1 } else { 2 } }\n",
+    )
+    .write("b.rs", &big);
+    r.commit("main", "start\n", 0, &[]);
+    r.write(
+        "a.rs",
+        "fn a(x: i32) -> i32 { if x > 1 { 1 } else { 2 } }\n",
+    );
+    r.extend("tune a\n", 100);
+    r.write("b.rs", big.replace("x + 0", "x - 0"));
+    r.extend("fix wrong result in b0\n", 200);
+    r.write("c.rs", "fn c() {}\n");
+    r.extend("add c\n", 400);
+    scan(&r.dir, "main");
+    // One cut, at day 182: a.rs changed once before it, b.rs is fixed after it.
+    common::assert_rows(
+        &r.dir,
+        "select k, path, changes, fixes from units.defect_windows order by path",
+        "(1,a.rs,1,0) (1,b.rs,0,1)",
+    );
+    let json = succeeds(
+        &r.dir,
+        &["validate", "--format", "json", "--labels", "none.jsonl"],
+    );
+    let found = |ranking: &str| {
+        let m = &json[json.find(&format!(r#""ranking":"{ranking}""#)).unwrap()..];
+        m[..m.find('}').unwrap()].to_owned()
+    };
+    // Ranked by changes, a.rs comes first and holds no fix; ranked by size, b.rs does.
+    assert!(found("changes").contains(r#""found":0,"#), "{json}");
+    assert!(found("tokens").contains(r#""found":1,"#), "{json}");
+    assert!(json.contains("recall may be as low as 0.6"), "{json}");
+    assert!(json.contains(r#""labels":{"count":0,"#), "{json}");
+}
