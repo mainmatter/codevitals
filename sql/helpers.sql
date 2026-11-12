@@ -58,6 +58,14 @@ create or replace macro lang_family(lang) as
 create or replace macro family_ratio(num, den, lang, fam) as
   sum(num) filter (lang_family(lang) = fam) / nullif(sum(den) filter (lang_family(lang) = fam), 0);
 
+-- Whether a span is a non-local exit as `exceptions` counts them: throw, raise,
+-- longjmp, and Rust's panic!, unreachable!, todo!, unimplemented!, unwrap and expect,
+-- which the intent kinds (invariant, unhandled, unfinished) split. Elsewhere those
+-- kinds are no throws of their own (a raise NotImplementedError is also a throw).
+create or replace macro is_throw(kind, name, lang) as
+  kind = 'throw'
+  or (lang = 'rust' and (kind in ('unhandled', 'unfinished') or (kind = 'invariant' and name = 'unreachable')));
+
 -- Whether a `test_if` span's code is test code: `gate` (conjunctions joined by `|`,
 -- features by `&`) holds when every feature of some conjunction is test-only, by
 -- name or because `declared` (features joined by `,`) lists it.
@@ -251,11 +259,11 @@ qualified as (
    and (s.start_byte, s.end_byte) <> (f.start_byte, f.end_byte)
   group by all),
 innermost as (
-  select s.blob, s.test_features, s.kind, f.start_byte, f.end_byte
+  select s.blob, s.test_features, s.kind, s.name, s.lang, f.start_byte, f.end_byte
   from code_spans s join fns f
     on f.blob = s.blob and f.test_features = s.test_features
    and f.start_byte <= s.start_byte and s.end_byte <= f.end_byte
-  where s.kind in ('branch', 'condition', 'throw', 'goto')
+  where s.kind in ('branch', 'condition', 'throw', 'goto', 'invariant', 'unhandled', 'unfinished')
   qualify row_number() over (partition by s.blob, s.test_features, s.kind, s.start_byte, s.end_byte
                              order by f.start_byte desc, f.end_byte) = 1),
 inner_sums as (
@@ -271,8 +279,11 @@ inner_sums as (
 counts as (
   select blob, test_features, start_byte, end_byte,
          count(*) filter (kind in ('branch', 'condition')) as decisions,
-         count(*) filter (kind = 'throw') as throws,
-         count(*) filter (kind = 'goto') as gotos
+         count(*) filter (is_throw(kind, name, lang)) as throws,
+         count(*) filter (kind = 'goto') as gotos,
+         count(*) filter (kind = 'invariant') as invariants,
+         count(*) filter (kind = 'unhandled') as unhandled,
+         count(*) filter (kind = 'unfinished') as unfinished
   from innermost group by all),
 nesting as (
   select f.blob, f.test_features, f.start_byte, f.end_byte,
@@ -291,7 +302,8 @@ select f.blob, f.test_features, f.lang, f.start_byte, f.end_byte, f.line, f.end_
             else (f.blob, f.start_byte, f.end_byte) in (select blob, start_byte, end_byte from spans where kind = 'pub')
        end as public,
        n.nesting, coalesce(c.decisions, 0) as decisions, coalesce(c.throws, 0) as throws,
-       coalesce(c.gotos, 0) as gotos
+       coalesce(c.gotos, 0) as gotos, coalesce(c.invariants, 0) as invariants,
+       coalesce(c.unhandled, 0) as unhandled, coalesce(c.unfinished, 0) as unfinished
 from fns f join nesting n using (blob, test_features, start_byte, end_byte)
 left join qualified q using (blob, test_features, start_byte, end_byte)
 left join counts c using (blob, test_features, start_byte, end_byte)
@@ -313,8 +325,11 @@ counts as (
     coalesce(sum(tokens) filter (kind = 'file'), 0) as tokens,
     count(*) filter (kind in ('branch', 'condition')) as decisions,
     count(*) filter (kind = 'global_state') as global_state,
-    count(*) filter (kind = 'throw') as throws,
-    count(*) filter (kind = 'goto') as gotos
+    count(*) filter (is_throw(kind, name, lang)) as throws,
+    count(*) filter (kind = 'goto') as gotos,
+    count(*) filter (kind = 'invariant') as invariants,
+    count(*) filter (kind = 'unhandled') as unhandled,
+    count(*) filter (kind = 'unfinished') as unfinished
   from code_spans group by blob, test_features)
 select c.blob, c.test_features, c.lang,
        -- A file that is test code throughout is no production file.

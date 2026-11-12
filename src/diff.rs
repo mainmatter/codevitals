@@ -91,6 +91,27 @@ const SPECS: &[Spec] = &[
         langs: None,
     },
     Spec {
+        metric: "invariants",
+        scale: 1000.0,
+        numerator: "invariants",
+        denominator: Some("tokens"),
+        langs: None,
+    },
+    Spec {
+        metric: "unhandled",
+        scale: 1000.0,
+        numerator: "unhandled",
+        denominator: Some("tokens"),
+        langs: None,
+    },
+    Spec {
+        metric: "unfinished",
+        scale: 1000.0,
+        numerator: "unfinished",
+        denominator: Some("tokens"),
+        langs: None,
+    },
+    Spec {
         metric: "goto",
         scale: 1000.0,
         numerator: "gotos",
@@ -327,18 +348,20 @@ with s as (select unnest([0, 1]) as s),
 f as (select s.s, f.* from s join units.files f on f.since <= s.s and s.s < f.until),
 fn as (select s.s, f.* from s join units.functions f on f.since <= s.s and s.s < f.until),
 sums as (select s, lineage, sum(own_tokens) as tokens, sum(decisions) as decisions,
-                sum(throws) as throws, sum(gotos) as gotos
+                sum(throws) as throws, sum(gotos) as gotos, sum(invariants) as invariants,
+                sum(unhandled) as unhandled, sum(unfinished) as unfinished
          from fn group by all)
 select s, 'function' as kind, function as id, lineage, path, qualified as name, lang,
        own_tokens as tokens, tokens as fn_tokens, decisions, throws, gotos, 0 as global_state,
        tokens * nesting as nested_tokens, if(tokens > large_tokens(), tokens, 0) as large_tokens,
-       if(public, 0, tokens) as private_tokens, nesting, params
+       if(public, 0, tokens) as private_tokens, nesting, params, invariants, unhandled, unfinished
 from fn
 union all
 select f.s, 'file', f.lineage || ' (outside functions)', f.lineage, f.path, '(outside functions)', f.lang,
        f.tokens - coalesce(u.tokens, 0), 0, f.decisions - coalesce(u.decisions, 0),
        f.throws - coalesce(u.throws, 0), f.gotos - coalesce(u.gotos, 0), f.global_state, 0, 0, 0,
-       null, null
+       null, null, f.invariants - coalesce(u.invariants, 0), f.unhandled - coalesce(u.unhandled, 0),
+       f.unfinished - coalesce(u.unfinished, 0)
 from f left join sums u using (s, lineage);
 ";
 

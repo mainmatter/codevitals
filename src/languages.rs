@@ -26,6 +26,9 @@ pub struct Lang {
 pub const KINDS: &[&str] = &[
     "fn", "call", "import", "module", "pub", "static", "branch", "condition", "block",
     "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
+    // Panics by intent: a stated invariant (assert, unreachable), a fallible operation
+    // left unhandled (Rust unwrap, expect), unfinished code (todo, NotImplementedError).
+    "invariant", "unhandled", "unfinished",
     // What qualifies the names of the functions inside: a Rust impl or trait, a class,
     // a C++ namespace.
     "scope",

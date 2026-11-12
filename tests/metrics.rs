@@ -595,7 +595,7 @@ fn sql_covers_every_language() {
             names.len(),
             names.join(", ")
         ),
-        "(12,0)",
+        "(15,0)",
     );
     let sql = codevitals::SQL;
     let mut kinds = Vec::new();

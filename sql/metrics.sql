@@ -293,6 +293,51 @@ Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must h
 
 Trend: rising means control leaves functions in more places a caller cannot see. Unvalidated.';
 
+create or replace view metrics.invariants as
+select seq, 1000 * sum(invariants) / nullif(sum(tokens), 0) as value, sum(invariants) as count,
+       map(list(lang order by lang), list(1000 * invariants / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(invariants, tokens, lang, 'c') as c, 1000 * family_ratio(invariants, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(invariants, tokens, lang, 'python') as python, 1000 * family_ratio(invariants, tokens, lang, 'ecma') as ecma
+from code_totals group by seq;
+
+comment on view metrics.invariants is 'NONLOCAL: Stated invariants per 1,000 tokens
+
+What: assertions that state what must hold, per 1,000 production tokens (value), and their number (count), overall and per language (c, rust, python): Rust assert!, assert_eq!, assert_ne!, their debug_ forms and unreachable!; Python assert; C/C++ assert().
+
+Read: an invariant written down is checked where it is assumed. More is not worse: these panics are intended. Compare each language over time.
+
+Trend: falling while the code grows means fewer assumptions are stated. Unvalidated.';
+
+create or replace view metrics.unhandled as
+select seq, 1000 * sum(unhandled) / nullif(sum(tokens), 0) as value, sum(unhandled) as count,
+       map(list(lang order by lang), list(1000 * unhandled / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(unhandled, tokens, lang, 'c') as c, 1000 * family_ratio(unhandled, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(unhandled, tokens, lang, 'python') as python, 1000 * family_ratio(unhandled, tokens, lang, 'ecma') as ecma
+from code_totals group by seq;
+
+comment on view metrics.unhandled is 'NONLOCAL: Fallible operations left unhandled per 1,000 tokens
+
+What: Rust unwrap and expect calls per 1,000 production tokens (value), and their number (count).
+
+Read: each one panics instead of handling a failure. Syntax cannot tell an unwrap that cannot fail (a fixed regex, a lock) from one that can, so this counts both.
+
+Trend: rising means more failures turned into panics instead of handled. Unvalidated.';
+
+create or replace view metrics.unfinished as
+select seq, 1000 * sum(unfinished) / nullif(sum(tokens), 0) as value, sum(unfinished) as count,
+       map(list(lang order by lang), list(1000 * unfinished / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(unfinished, tokens, lang, 'c') as c, 1000 * family_ratio(unfinished, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(unfinished, tokens, lang, 'python') as python, 1000 * family_ratio(unfinished, tokens, lang, 'ecma') as ecma
+from code_totals group by seq;
+
+comment on view metrics.unfinished is 'NONLOCAL: Unfinished code per 1,000 tokens
+
+What: markers of code left unfinished per 1,000 production tokens (value), and their number (count), overall and per language (rust, python): Rust todo! and unimplemented!, Python raise NotImplementedError.
+
+Read: each panics when reached. Python''s NotImplementedError also marks abstract methods, which are finished.
+
+Trend: rising means more paths left for later. Unvalidated.';
+
 create or replace view metrics.goto as
 select seq, 1000 * sum(gotos) / nullif(sum(tokens), 0) as value,
        map(list(lang order by lang), list(1000 * gotos / nullif(tokens, 0) order by lang)) as by_language

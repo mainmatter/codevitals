@@ -11,3 +11,4 @@
 (translation_unit (declaration declarator: [(identifier) (init_declarator) (array_declarator) (pointer_declarator declarator: (identifier))]) @global_state (#not-match? @global_state "^(extern|const|static const)[ \t\n]"))
 (goto_statement) @goto
 (call_expression function: (identifier) @_f (#match? @_f "^(longjmp|siglongjmp)$")) @throw
+(call_expression function: (identifier) @_a (#eq? @_a "assert")) @invariant

@@ -1,13 +1,16 @@
 use codevitals::{LANGS, Lang, Span, extract};
 
 /// Kinds of control-flow structure, checked by `structure` instead of `check`.
-const STRUCTURE: [&str; 6] = [
+const STRUCTURE: [&str; 9] = [
     "branch",
     "condition",
     "block",
     "global_state",
     "throw",
     "goto",
+    "invariant",
+    "unhandled",
+    "unfinished",
 ];
 
 /// One line per span: kind name line end_line tokens comments params errors.
@@ -123,7 +126,7 @@ fn f(x: Option<i32>) -> i32 {
 block 2 0 77
 branch 3 0 61
 condition 3 0 13
-throw 3 0 5
+unhandled 3 0 5
 block 3 1 28
 branch 4 1 26
 block 4 2 20
@@ -133,7 +136,7 @@ block 5 3 10
 throw 5 0 7
 branch 7 1 18
 block 7 1 12
-throw 8 0 8
+unhandled 8 0 8
 branch 10 0 7
 branch 10 0 3
 "#,
@@ -542,6 +545,38 @@ fn scopes() {
     assert_eq!(
         scopes("x.js", "class A { f() {} }\nconst B = class Q {};\n"),
         ["A", "Q"]
+    );
+}
+
+/// Panics by intent: stated invariants, fallible operations left unhandled,
+/// unfinished code; in Python and C only where the language has the construct.
+#[test]
+fn panics_by_intent() {
+    let kinds = |path: &str, src: &str| {
+        extract(Lang::of(path).unwrap(), src.as_bytes())
+            .into_iter()
+            .filter(|s| ["throw", "invariant", "unhandled", "unfinished"].contains(&s.kind))
+            .map(|s| format!("{}:{}", s.kind, s.name.unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(
+        kinds(
+            "x.rs",
+            "fn f() { assert!(a); debug_assert_eq!(a, b); unreachable!(); panic!(); todo!(); unimplemented!(); x.unwrap(); y.expect(\"e\"); x.unwrap_or(1); }"
+        ),
+        "invariant:assert invariant:debug_assert_eq invariant:unreachable throw: unfinished: unfinished: unhandled: unhandled:"
+    );
+    assert_eq!(
+        kinds(
+            "x.py",
+            "def f():\n    assert x\n    raise NotImplementedError\n    raise NotImplementedError('no')\n    raise ValueError()\n"
+        ),
+        "invariant: throw: unfinished: throw: unfinished: throw:"
+    );
+    assert_eq!(
+        kinds("x.c", "void f(void) { assert(x > 0); abort(); }"),
+        "invariant:"
     );
 }
 

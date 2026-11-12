@@ -25,11 +25,12 @@ UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none"
          "decisions": "none", "nesting": "none",
          "function_decisions": "none", "function_nesting": "none", "function_params": "none",
          "global_state": "none", "exceptions": "none", "goto": "none",
+         "invariants": "none", "unhandled": "none", "unfinished": "none",
          "import_distance": "none"}  # others are shares in [0, 1]
 LIFTS = {"co_change_distance", "import_distance"}  # 1 = chance; drawn as a dashed reference line
 # Drawn as one line per language family, plus the combined value, which moves with
 # the language mix as well as with the code.
-FAMILIES = {"decisions", "nesting", "global_state", "exceptions",
+FAMILIES = {"decisions", "nesting", "global_state", "exceptions", "invariants", "unhandled", "unfinished",
             "dependency_reach", "import_distance", "import_coverage"}
 FAMILY_LABELS = {"c": "C/C++", "rust": "Rust", "python": "Python", "ecma": "JS/TS"}
 # A combined value is an aggregate, not another category: it and its confidence band

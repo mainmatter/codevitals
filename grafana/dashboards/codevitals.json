@@ -2920,6 +2920,522 @@
     {
       "id": 31,
       "type": "timeseries",
+      "title": "Stated invariants per 1,000 tokens",
+      "description": "What: assertions that state what must hold, per 1,000 production tokens (value), and their number (count), overall and per language (c, rust, python): Rust assert!, assert_eq!, assert_ne!, their debug_ forms and unreachable!; Python assert; C/C++ assert().\n\nRead: an invariant written down is checked where it is assumed. More is not worse: these panics are intended. Compare each language over time.\n\nTrend: falling while the code grows means fewer assumptions are stated. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 94
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.invariants",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Fallible operations left unhandled per 1,000 tokens",
+      "description": "What: Rust unwrap and expect calls per 1,000 production tokens (value), and their number (count).\n\nRead: each one panics instead of handling a failure. Syntax cannot tell an unwrap that cannot fail (a fixed regex, a lock) from one that can, so this counts both.\n\nTrend: rising means more failures turned into panics instead of handled. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 103
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.unhandled",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Unfinished code per 1,000 tokens",
+      "description": "What: markers of code left unfinished per 1,000 production tokens (value), and their number (count), overall and per language (rust, python): Rust todo! and unimplemented!, Python raise NotImplementedError.\n\nRead: each panics when reached. Python's NotImplementedError also marks abstract methods, which are finished.\n\nTrend: rising means more paths left for later. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 103
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.unfinished",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "All languages",
+              "type": "number"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "All languages"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
       "title": "goto per 1,000 C/C++ tokens",
       "description": "What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
       "datasource": {
@@ -2930,7 +3446,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 94
+        "y": 103
       },
       "targets": [
         {
@@ -3006,7 +3522,7 @@
       }
     },
     {
-      "id": 32,
+      "id": 35,
       "type": "row",
       "title": "Dependencies through imports",
       "collapsed": false,
@@ -3014,12 +3530,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 103
+        "y": 112
       },
       "panels": []
     },
     {
-      "id": 33,
+      "id": 36,
       "type": "timeseries",
       "title": "Share of its language's code a file depends on ↓",
       "description": "What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
@@ -3031,7 +3547,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 104
+        "y": 113
       },
       "targets": [
         {
@@ -3191,7 +3707,7 @@
       }
     },
     {
-      "id": 34,
+      "id": 37,
       "type": "timeseries",
       "title": "Distance imports reach (vs chance) ↓",
       "description": "What: how far through the directory tree imports reach, relative to chance, each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means imports reach as far as if rewired at random; below 1, files mostly import their neighbours. edges is the number of importing file pairs.\n\nTrend: rising means code depends on code ever further away: the tree stops matching the structure. Moving files steps it.",
@@ -3203,7 +3719,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 104
+        "y": 113
       },
       "targets": [
         {
@@ -3379,7 +3895,7 @@
       }
     },
     {
-      "id": 35,
+      "id": 38,
       "type": "timeseries",
       "title": "How complete the dependency metrics are, per language",
       "description": "What: the share of each language's imports of this repository's own code that codevitals could follow to a file, each week (c, rust, python, ecma).\n\nRead: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency metrics became less complete, not that the code changed.",
@@ -3391,7 +3907,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 104
+        "y": 113
       },
       "targets": [
         {
