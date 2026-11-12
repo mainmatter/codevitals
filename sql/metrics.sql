@@ -96,6 +96,20 @@ Read: 12 means as if spread evenly over 12 files. Files per commit is shown beca
 
 Trend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).';
 
+create or replace view metrics.change_span as
+with commits as (select distinct seq, k from change_weights)
+select w.win as seq, avg(c.k) as value, quantile_disc(c.k, 0.9) as p90, max(c.k) as max,
+       low(c.k) as low, high(c.k) as high, count(*) as commits, any_value(w.span_weeks) as span_weeks
+from windows w join commits c using (seq) group by w.win;
+
+comment on view metrics.change_span is 'CHANGES: Production files per commit
+
+What: how many production files a commit changes, over the last 100 code commits each week: the mean (value), the 90th percentile (p90) and the most (max). Commits of more than 30 files (bulk changes) are left out; a renamed file counts once. Lower is better.
+
+Read: 2.5 means a typical commit touches two to three files; p90 4 means one commit in ten touches more than four. The shaded band is a 95% confidence interval for the mean: movement inside it is noise.
+
+Trend: rising means a change needs edits in more places: what changes together is spread out. It is the files per commit beside change_entropy. Unvalidated.';
+
 create or replace view metrics.encapsulation as
 select seq, sum(private_tokens) / sum(fn_tokens) as value,
        map(list(lang order by lang), list(private_tokens / fn_tokens order by lang)) as by_language,

@@ -21,7 +21,7 @@ assert set(views) == set(comments), (views, comments.keys())
 # The Infinity data source is a dashboard variable, so the dashboard imports into any
 # Grafana (Grafana Cloud included) whatever the data source's uid there.
 DS = {"type": "yesoreyeram-infinity-datasource", "uid": "${datasource}"}
-UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none",
+UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none", "change_span": "none",
          "decisions": "none", "nesting": "none",
          "function_decisions": "none", "function_nesting": "none", "function_params": "none",
          "global_state": "none", "exceptions": "none", "goto": "none",
@@ -48,6 +48,7 @@ PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500"]  # one per language famil
 OTHER = "#9085e9"
 SECOND_AXIS = {"size": ("files", "files"),  # an extra series on the right axis
                "change_entropy": ("files_per_commit", "files per commit"),
+               "change_span": ("p90", "90th percentile"),
                "function_decisions": ("max", "max"), "function_nesting": ("max", "max"),
                "function_params": ("max", "max"),
                # Raw counts beside densities: a density falls when plain code is added.
@@ -55,7 +56,7 @@ SECOND_AXIS = {"size": ("files", "files"),  # an extra series on the right axis
                "invariants": ("count", "count"), "unhandled": ("count", "count"),
                "unfinished": ("count", "count")}
 LOG_SCALE = {"change_entropy"}
-BANDS = {"co_change_distance", "rework", "ownership"}  # low/high columns: two standard errors
+BANDS = {"co_change_distance", "rework", "ownership", "change_span"}  # low/high columns: two standard errors
 ROWS = {"SIZE": "Size", "CHANGES": "How changes spread", "ENTROPY": "Entropy of change",
         "STRUCTURE": "Code structure", "COMPLEXITY": "Local complexity",
         "NONLOCAL": "Non-local control flow and state", "DEPENDENCIES": "Dependencies through imports"}

@@ -45,6 +45,11 @@ fn metric_views() {
             "select seq, round(value, 4), round(files_per_commit, 4), round(rust, 4) from metrics.change_entropy",
             "(2,2.0,1.3333,2.0) (3,2.5714,1.3333,2.5714)",
         ),
+        // Files per commit in each window: c0 1, c1 2, c2 1 (the rename is one); c3 1.
+        (
+            "select seq, round(value, 4), p90, max, commits from metrics.change_span",
+            "(2,1.3333,2,2,3) (3,1.3333,2,2,3)",
+        ),
         // No function is pub, so all function tokens are non-public.
         (
             "select seq, value, by_language from metrics.encapsulation",
