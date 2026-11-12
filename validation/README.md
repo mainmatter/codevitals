@@ -46,8 +46,8 @@ unflagged commits, which still allows up to about 450 missed fixes among the
 
 Before implementing Cognitive Complexity (SonarSource), it was computed offline
 per production function at the tip of one Rust and one Python repository
-(`examples/cognitive_offline.rs`; it reproduces the specification's examples:
-`sumOfPrimes` 7, `getWords` 1) and compared, by Spearman rank correlation, with
+(a one-off script, reproducing the specification's examples `sumOfPrimes` 7 and
+`getWords` 1; removed since, it is `examples/cognitive_offline.rs` at commit 25e8010) and compared, by Spearman rank correlation, with
 decision points plus maximum nesting per function (`units.functions`):
 
 | Repository | Functions | ρ(CC, decisions + nesting) | ρ, functions with either > 0 | ρ(CC, decisions) | ρ(CC, tokens) |
@@ -56,7 +56,7 @@ decision points plus maximum nesting per function (`units.functions`):
 | requests (Python) | 268 | 0.989 | 0.969 (147) | 0.992 | 0.803 |
 
 Both exceed 0.9, so Cognitive Complexity is not implemented: per function it
-ranks code almost as decisions plus nesting already do. Run it with
+ranks code almost as decisions plus nesting already do. It ran as
 `cargo run --release --example cognitive_offline REPO units.json` on the output of
 `cv units`. Caveat: three quarters of ripgrep's functions score 0 on both, which
 lifts the overall correlation; among the functions with any branching it is 0.815.
