@@ -2,13 +2,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use codevitals::{Incremental, Lang, Span};
+use duckdb::arrow::array::{
+    ArrayBuilder, ArrayRef, Int32Array, Int32Builder, StringBuilder, UInt64Builder,
+};
+use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::{Connection, params};
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -172,9 +176,9 @@ enum Content {
     Skipped,
 }
 
-/// Connections appending spans at once. One appends about two million rows a
-/// second, slower than the workers extract them; two keep up (on RediSearch, parse
-/// 7.7 s with one, 4.7 s with two, no faster with more).
+/// Connections appending spans at once. One is slower than the workers extract
+/// (on RediSearch, parse 5.3 s with one, 3.4 s with two); more do not help, as the
+/// parse then uses every core.
 const WRITERS: usize = 2;
 
 /// Append parsed blobs as they arrive, committing every `BATCH` blobs; return how
@@ -208,58 +212,148 @@ fn write_spans(
     Ok(written)
 }
 
-/// Append `parsed` in one transaction; return how many blobs it held.
+/// Append `parsed` in one transaction, as Arrow record batches (a column at a time,
+/// several times faster than appending row by row); return how many blobs it held.
 fn append<'a>(db: &mut Connection, parsed: impl Iterator<Item = Parsed<'a>>) -> Result<usize> {
+    let (mut spans, mut fingerprints) = (SpanColumns::default(), FingerprintColumns::default());
     let mut written = 0;
-    let tx = db.transaction()?;
-    let mut spans = tx.appender("spans")?;
-    let mut fingerprints = tx.appender("fingerprints")?;
     for (blob, lang, content) in parsed {
         written += 1;
-        // Blobs that are not parsed get rows with NULL counts.
-        let unparsed: &[&str] = match content {
+        match content {
             Content::Code(extracted) => {
-                for s in extracted {
-                    if s.kind == "fingerprint" {
-                        fingerprints.append_row(params![blob, s.hash, s.start_byte, s.end_byte])?;
-                        continue;
+                for s in &extracted {
+                    match s.kind {
+                        "fingerprint" => fingerprints.push(blob, s),
+                        _ => spans.push(blob, lang, s),
                     }
-                    spans.append_row(params![
-                        blob,
-                        V,
-                        lang.name,
-                        s.kind,
-                        s.name,
-                        s.line,
-                        s.end_line,
-                        s.tokens,
-                        s.comments,
-                        s.params,
-                        (s.kind == "fn").then_some(s.hash),
-                        s.errors,
-                        s.start_byte,
-                        s.end_byte,
-                        s.depth
-                    ])?;
                 }
-                &[]
             }
-            Content::Generated => &["file", "generated"],
-            Content::Skipped => &["file"],
-        };
-        let null = None::<i32>;
-        for kind in unparsed {
-            spans.append_row(params![
-                blob, V, lang.name, kind, null, 1, null, null, null, null, null, null, null, null,
-                null
-            ])?;
+            // Blobs that are not parsed get rows with NULL counts.
+            Content::Generated => {
+                spans.push_unparsed(blob, lang, "file");
+                spans.push_unparsed(blob, lang, "generated");
+            }
+            Content::Skipped => spans.push_unparsed(blob, lang, "file"),
         }
     }
-    spans.flush()?;
-    fingerprints.flush()?;
-    drop((spans, fingerprints));
+    let tx = db.transaction()?;
+    tx.appender("spans")?.append_record_batch(spans.finish()?)?;
+    tx.appender("fingerprints")?
+        .append_record_batch(fingerprints.finish()?)?;
     tx.commit()?;
     Ok(written)
+}
+
+/// The columns of `spans` rows, as `schema.sql` declares them.
+#[derive(Default)]
+struct SpanColumns {
+    blob: StringBuilder,
+    lang: StringBuilder,
+    kind: StringBuilder,
+    name: StringBuilder,
+    line: Int32Builder,
+    end_line: Int32Builder,
+    tokens: Int32Builder,
+    comments: Int32Builder,
+    params: Int32Builder,
+    hash: UInt64Builder,
+    errors: Int32Builder,
+    start_byte: Int32Builder,
+    end_byte: Int32Builder,
+    depth: Int32Builder,
+}
+
+impl SpanColumns {
+    fn push(&mut self, blob: &str, lang: Lang, s: &Span) {
+        self.blob.append_value(blob);
+        self.lang.append_value(lang.name);
+        self.kind.append_value(s.kind);
+        self.name.append_option(s.name.as_deref());
+        self.line.append_value(s.line);
+        self.end_line.append_value(s.end_line);
+        self.tokens.append_value(s.tokens);
+        self.comments.append_value(s.comments);
+        self.params.append_option(s.params);
+        // The structural hash of functions only.
+        self.hash.append_option((s.kind == "fn").then_some(s.hash));
+        self.errors.append_option(s.errors);
+        self.start_byte.append_value(s.start_byte);
+        self.end_byte.append_value(s.end_byte);
+        self.depth.append_value(s.depth);
+    }
+
+    /// A row of a blob that is not parsed: its kind, line 1, NULL counts.
+    fn push_unparsed(&mut self, blob: &str, lang: Lang, kind: &str) {
+        self.blob.append_value(blob);
+        self.lang.append_value(lang.name);
+        self.kind.append_value(kind);
+        self.line.append_value(1);
+        self.name.append_null();
+        self.hash.append_null();
+        for c in [
+            &mut self.end_line,
+            &mut self.tokens,
+            &mut self.comments,
+            &mut self.params,
+            &mut self.errors,
+            &mut self.start_byte,
+            &mut self.end_byte,
+            &mut self.depth,
+        ] {
+            c.append_null();
+        }
+    }
+
+    fn finish(mut self) -> Result<RecordBatch> {
+        let rows = self.blob.len();
+        let v: ArrayRef = Arc::new(Int32Array::from(vec![V; rows]));
+        let string = |b: &mut StringBuilder| -> ArrayRef { Arc::new(b.finish()) };
+        let int = |b: &mut Int32Builder| -> ArrayRef { Arc::new(b.finish()) };
+        Ok(RecordBatch::try_from_iter([
+            ("blob", string(&mut self.blob)),
+            ("v", v),
+            ("lang", string(&mut self.lang)),
+            ("kind", string(&mut self.kind)),
+            ("name", string(&mut self.name)),
+            ("line", int(&mut self.line)),
+            ("end_line", int(&mut self.end_line)),
+            ("tokens", int(&mut self.tokens)),
+            ("comments", int(&mut self.comments)),
+            ("params", int(&mut self.params)),
+            ("hash", Arc::new(self.hash.finish()) as ArrayRef),
+            ("errors", int(&mut self.errors)),
+            ("start_byte", int(&mut self.start_byte)),
+            ("end_byte", int(&mut self.end_byte)),
+            ("depth", int(&mut self.depth)),
+        ])?)
+    }
+}
+
+/// The columns of `fingerprints` rows.
+#[derive(Default)]
+struct FingerprintColumns {
+    blob: StringBuilder,
+    hash: UInt64Builder,
+    start_byte: Int32Builder,
+    end_byte: Int32Builder,
+}
+
+impl FingerprintColumns {
+    fn push(&mut self, blob: &str, s: &Span) {
+        self.blob.append_value(blob);
+        self.hash.append_value(s.hash);
+        self.start_byte.append_value(s.start_byte);
+        self.end_byte.append_value(s.end_byte);
+    }
+
+    fn finish(mut self) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_from_iter([
+            ("blob", Arc::new(self.blob.finish()) as ArrayRef),
+            ("hash", Arc::new(self.hash.finish())),
+            ("start_byte", Arc::new(self.start_byte.finish())),
+            ("end_byte", Arc::new(self.end_byte.finish())),
+        ])?)
+    }
 }
 
 /// What one blob holds. Not parsed: blobs over `MAX_BLOB_BYTES`, binary (a NUL

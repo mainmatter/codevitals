@@ -15,7 +15,7 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "string"] }
 crossterm = "0.29.0"
-duckdb = { version = "1.20000.1", features = ["bundled", "json"] }
+duckdb = { version = "1.20000.1", features = ["appender-arrow", "bundled", "json"] }
 gix = "0.90.0"
 petgraph = { version = "0.8.3", default-features = false }
 rayon = "1.12.0"
