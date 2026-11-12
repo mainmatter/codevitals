@@ -46,6 +46,21 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
     // insertion order (codevitals' setting), even under ORDER BY.
     let mut events = Vec::<(i32, i32, usize, usize, usize)>::new();
     if imports {
+        // The views import_edges reads several times each, computed once: temp tables
+        // of the same names shadow them for this connection (0.6 s to 0.2 s on
+        // RediSearch). `metrics` may have cached some already; those stay.
+        let mut shadowed = Vec::new();
+        for view in SHADOWED {
+            let cached: bool = db.query_row(
+                "select count(*) > 0 from duckdb_tables() where temporary and table_name = ?",
+                [view],
+                |r| r.get(0),
+            )?;
+            if !cached {
+                db.execute_batch(&format!("create temp table {view} as from main.{view}"))?;
+                shadowed.push(view);
+            }
+        }
         let mut edges =
             db.prepare("select since, until, source, target, family(source) from import_edges")?;
         let mut rows = edges.query([])?;
@@ -54,6 +69,11 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
             let family = intern(&mut families, r.get(4)?);
             events.push((r.get(0)?, 1, s, t, family));
             events.push((r.get(1)?, -1, s, t, family));
+        }
+        drop(rows);
+        drop(edges);
+        for view in shadowed {
+            db.execute_batch(&format!("drop table temp.{view}"))?;
         }
     }
     events.sort_unstable_by_key(|e| e.0);
@@ -155,6 +175,9 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
     );
     Ok(())
 }
+
+/// Views that `import_edges` reads more than once.
+const SHADOWED: [&str; 3] = ["path_roles", "code_versions", "blob_imports"];
 
 /// For every node: how many other nodes it reaches, and the size of its strongly
 /// connected component. Kosaraju's algorithm (iterative, so deep chains cannot
