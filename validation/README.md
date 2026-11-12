@@ -41,3 +41,22 @@ hang or wrong without a fix keyword. The `is_fix` rule was designed after seeing
 these labels, so its figures are optimistic. No fix appeared among 27 random
 unflagged commits, which still allows up to about 450 missed fixes among the
 4,066 others (95% upper bound), so recall may be as low as about 0.6.
+
+# Cognitive Complexity against decisions + nesting (2026-11-12)
+
+Before implementing Cognitive Complexity (SonarSource), it was computed offline
+per production function at the tip of one Rust and one Python repository
+(`examples/cognitive_offline.rs`; it reproduces the specification's examples:
+`sumOfPrimes` 7, `getWords` 1) and compared, by Spearman rank correlation, with
+decision points plus maximum nesting per function (`units.functions`):
+
+| Repository | Functions | ρ(CC, decisions + nesting) | ρ, functions with either > 0 | ρ(CC, decisions) | ρ(CC, tokens) |
+|---|---|---|---|---|---|
+| ripgrep (Rust) | 2,174 | 0.971 | 0.815 (594) | 0.982 | 0.686 |
+| requests (Python) | 268 | 0.989 | 0.969 (147) | 0.992 | 0.803 |
+
+Both exceed 0.9, so Cognitive Complexity is not implemented: per function it
+ranks code almost as decisions plus nesting already do. Run it with
+`cargo run --release --example cognitive_offline REPO units.json` on the output of
+`cv units`. Caveat: three quarters of ripgrep's functions score 0 on both, which
+lifts the overall correlation; among the functions with any branching it is 0.815.
