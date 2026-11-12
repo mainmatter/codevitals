@@ -79,29 +79,28 @@ impl Incremental {
             Some((l, p)) if l.name == lang.name => p,
             slot => &mut slot.insert((lang, parser(lang))).1,
         };
-        let last = self.last.take().filter(|(l, ..)| l.name == lang.name);
-        let (old, changes) = match last {
-            Some((_, old_src, mut tree, facts)) => {
+        let parse = |parser: &mut Parser, old: Option<&Tree>| {
+            parser
+                .parse(src, old)
+                .expect("parse has no timeout or cancellation")
+        };
+        let (tree, old) = match self.last.take().filter(|(l, ..)| l.name == lang.name) {
+            Some((_, old_src, mut old_tree, old_facts)) => {
                 let edits = edits(&old_src, src);
                 for edit in &edits {
-                    tree.edit(edit);
+                    old_tree.edit(edit);
                 }
-                (Some((tree, facts)), Changes::of(&edits))
+                let tree = parse(parser, Some(&old_tree));
+                let mut changes = Changes::of(&edits);
+                changes.add(
+                    old_tree
+                        .changed_ranges(&tree)
+                        .map(|r| r.start_byte..r.end_byte),
+                );
+                (tree, Some((old_facts, changes)))
             }
-            None => (None, Changes::default()),
+            None => (parse(parser, None), None),
         };
-        let tree = parser
-            .parse(src, old.as_ref().map(|(tree, _)| tree))
-            .expect("parse has no timeout or cancellation");
-        let old = old.map(|(old_tree, facts)| {
-            let mut changes = changes;
-            changes.add(
-                old_tree
-                    .changed_ranges(&tree)
-                    .map(|r| r.start_byte..r.end_byte),
-            );
-            (facts, changes)
-        });
         let facts = facts(lang, src, &tree, old.as_ref().map(|(f, c)| (f, c)));
         let spans = spans(lang, src, &tree, &facts);
         self.last = Some((lang, src.to_vec(), tree, facts));
@@ -114,30 +113,29 @@ impl Incremental {
 #[derive(Default)]
 struct Changes {
     dirty: Vec<Range<usize>>,
-    /// Per edit, in order: where its new text ends, and the bytes and rows the
-    /// text after it moved by, all edits so far included.
+    /// Per edit, in order: where its new text ends, and the bytes the text after it
+    /// moved by, all edits so far included.
     shifts: Vec<(usize, Shift)>,
 }
 
-/// How far a stretch of unchanged text moved between two blobs. Edits replace
-/// whole lines, so columns do not move.
-#[derive(Clone, Copy, Default, Debug)]
-struct Shift {
-    bytes: isize,
-    rows: isize,
+/// How many bytes a stretch of unchanged text moved between two blobs.
+type Shift = isize;
+
+/// `x` moved by `by` bytes.
+fn moved(x: usize, by: Shift) -> usize {
+    x.wrapping_add_signed(by)
 }
 
 impl Changes {
     /// The changes of `edits`, which `edits` lists last first.
     fn of(edits: &[InputEdit]) -> Changes {
-        let (mut changes, mut moved) = (Changes::default(), Shift::default());
+        let (mut changes, mut shift) = (Changes::default(), 0);
         for e in edits.iter().rev() {
-            let start = e.start_byte.wrapping_add_signed(moved.bytes);
+            let start = moved(e.start_byte, shift);
             let end = start + (e.new_end_byte - e.start_byte);
             changes.dirty.push(start..end);
-            moved.bytes += e.new_end_byte as isize - e.old_end_byte as isize;
-            moved.rows += e.new_end_position.row as isize - e.old_end_position.row as isize;
-            changes.shifts.push((end, moved));
+            shift += e.new_end_byte as isize - e.old_end_byte as isize;
+            changes.shifts.push((end, shift));
         }
         changes
     }
@@ -163,11 +161,7 @@ impl Changes {
             return None;
         }
         let edits_before = self.shifts.partition_point(|(end, _)| *end <= bytes.start);
-        Some(
-            edits_before
-                .checked_sub(1)
-                .map_or(Shift::default(), |i| self.shifts[i].1),
-        )
+        Some(edits_before.checked_sub(1).map_or(0, |i| self.shifts[i].1))
     }
 }
 
@@ -201,7 +195,7 @@ struct Match {
 
 impl Match {
     fn shifted(mut self, by: Shift) -> Match {
-        let b = |x: usize| x.wrapping_add_signed(by.bytes);
+        let b = |x: usize| moved(x, by);
         self.root = (b(self.root.0), b(self.root.1));
         self.span = self.span.map(|(kind, at)| (kind, at.shifted(by)));
         self.params = self.params.map(|at| at.shifted(by));
@@ -215,39 +209,35 @@ impl Match {
     }
 }
 
-/// A node by its position and kind, to find again in the tree.
+/// A node by its bytes and kind, to find again in the tree.
 #[derive(Clone, Copy, Debug)]
 struct At {
-    start: (usize, Point),
-    end: (usize, Point),
+    start: usize,
+    end: usize,
     kind: u16,
 }
 
 impl At {
     fn of(n: Node) -> At {
         At {
-            start: (n.start_byte(), n.start_position()),
-            end: (n.end_byte(), n.end_position()),
+            start: n.start_byte(),
+            end: n.end_byte(),
             kind: n.kind_id(),
         }
     }
 
     fn shifted(self, by: Shift) -> At {
-        let p = |(b, p): (usize, Point)| {
-            let row = p.row.wrapping_add_signed(by.rows);
-            (b.wrapping_add_signed(by.bytes), Point::new(row, p.column))
-        };
         At {
-            start: p(self.start),
-            end: p(self.end),
-            kind: self.kind,
+            start: moved(self.start, by),
+            end: moved(self.end, by),
+            ..self
         }
     }
 
     /// The node in `tree`: the outermost of its kind over its bytes. Found by one
     /// descent from the root (`Node::parent` walks down from the root each time).
     fn node(self, tree: &Tree) -> Node<'_> {
-        let (start, end) = (self.start.0, self.end.0);
+        let (start, end) = (self.start, self.end);
         let mut cursor = tree.walk();
         loop {
             let n = cursor.node();
@@ -276,7 +266,7 @@ impl At {
     /// `node` the slow way, for ranges a descent cannot follow (zero-width nodes at a
     /// sibling's edge): up from the smallest node over the bytes.
     fn climb(self, tree: &Tree) -> Node<'_> {
-        let (start, end) = (self.start.0, self.end.0);
+        let (start, end) = (self.start, self.end);
         let at = |n: &Node| n.start_byte() == start && n.end_byte() == end;
         let mut n = tree
             .root_node()
@@ -314,7 +304,7 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
             return None;
         }
         let shift = changes.unchanged(n.byte_range())?;
-        let back = |x: usize| x.wrapping_add_signed(-shift.bytes);
+        let back = |x: usize| moved(x, -shift);
         let was = back(n.start_byte())..back(n.end_byte());
         let at_edge = |p: &usize| *p == was.start || *p == was.end;
         let i = old.zero_width.partition_point(|p| *p < was.start);
@@ -402,7 +392,7 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
         match (copied, old) {
             (Some((shift, was)), Some((old, _))) => {
                 let from = old.leaves.partition_point(|l| l.0 < was.start);
-                let b = |x: usize| x.wrapping_add_signed(shift.bytes);
+                let b = |x: usize| moved(x, shift);
                 facts.leaves.extend(
                     old.leaves[from..]
                         .iter()
@@ -540,10 +530,8 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
         comments.extend(m.comments.iter().map(|&(s, e, words)| ((s, e), words)));
         attributes.extend(m.attributes.iter().map(|a| a.node(tree)));
         if let Some((kind, at)) = m.span {
-            let key = (at.start.0, Reverse(at.end.0), kind);
+            let key = (at.start, Reverse(at.end), kind);
             let merged = spans.entry(key).or_insert(Captured {
-                start: at.start,
-                end: at.end,
                 node: Some(at),
                 name: None,
                 params: None,
@@ -561,10 +549,8 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
             true => ("test", None),
             false => ("test_if", Some(dnf_text(&gate))),
         };
-        let key = (range.start.0, Reverse(range.end.0), kind);
+        let key = (range.start, Reverse(range.end), kind);
         let merged = spans.entry(key).or_insert(Captured {
-            start: range.start,
-            end: range.end,
             node: None,
             name: None,
             params: None,
@@ -575,7 +561,8 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
     let is_comment = |n: Node| comments.contains_key(&(n.start_byte(), n.end_byte()));
     let (leaves, errors) = (&facts.leaves, facts.errors);
 
-    let span = |kind: &'static str, bytes: Range<usize>, start: Point, end: Point| {
+    let starts = line_starts(src);
+    let span = |kind: &'static str, bytes: Range<usize>| {
         // Leaves are disjoint and sorted, so both their starts and ends are sorted.
         let lo = leaves.partition_point(|l| l.0 < bytes.start);
         let hi = leaves.partition_point(|l| l.1 <= bytes.end);
@@ -588,20 +575,7 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
             }
             xxh3_64(&hashed)
         });
-        let line = start.row + 1;
-        let end_line = if end.column == 0 {
-            end.row
-        } else {
-            end.row + 1
-        };
         Span {
-            kind,
-            start_byte: int(bytes.start),
-            end_byte: int(bytes.end),
-            depth: 0,
-            name: None,
-            line: int(line),
-            end_line: int(end_line.max(line)),
             tokens: int(inside.len()),
             comments: int(comments
                 .range((bytes.start, 0)..)
@@ -609,36 +583,24 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
                 .filter(|((_, e), _)| *e <= bytes.end)
                 .map(|(_, words)| words)
                 .sum()),
-            params: None,
             hash: hash.unwrap_or(0),
-            errors: None,
+            ..Span::over(kind, bytes, &starts)
         }
     };
 
-    let last_line = src
-        .rsplit(|&b| b == b'\n')
-        .next()
-        .expect("rsplit yields at least once");
-    let src_end = Point::new(src.iter().filter(|&&b| b == b'\n').count(), last_line.len());
-    let mut file = span("file", 0..src.len(), Point::new(0, 0), src_end);
+    let mut file = span("file", 0..src.len());
     file.errors = Some(int(errors));
 
     // Spans come ordered by start, outer before inner, so the open spans of a kind
     // form a stack of end offsets: a span's depth is how many of them are still open.
     let mut open = HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
-    out.extend(fingerprints(lang, src, leaves));
+    out.extend(fingerprints(lang, leaves, &starts));
     // Nodes are found again only where a span needs one.
     let impl_item = tree.language().id_for_node_kind("impl_item", true);
-    for ((_, _, kind), captured) in spans {
-        let Captured {
-            start: (start, start_point),
-            end: (end, end_point),
-            node,
-            name,
-            params,
-        } = captured;
-        let mut s = span(kind, start..end, start_point, end_point);
+    for ((start, Reverse(end), kind), captured) in spans {
+        let Captured { node, name, params } = captured;
+        let mut s = span(kind, start..end);
         let stack = open.entry(kind).or_default();
         while stack.last().is_some_and(|&open_end| open_end <= start) {
             stack.pop();
@@ -675,15 +637,18 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
             out.push(s);
         }
     }
-    out.extend(markers(src, comments.keys().copied()));
+    out.extend(markers(src, comments.keys().copied(), &starts));
     out
 }
 
 /// Comment markers of unfinished or fragile code: TODO, FIXME, HACK, XXX (as
 /// written, upper case) and "do not touch" / "don't touch" (any case). One `marker`
 /// span per comment, named by its first marker.
-fn markers(src: &[u8], comments: impl Iterator<Item = (usize, usize)>) -> Vec<Span> {
-    let line_starts = line_starts(src);
+fn markers(
+    src: &[u8],
+    comments: impl Iterator<Item = (usize, usize)>,
+    starts: &[usize],
+) -> Vec<Span> {
     let mut out = Vec::new();
     for (start, end) in comments {
         let text = String::from_utf8_lossy(&src[start..end]);
@@ -691,11 +656,11 @@ fn markers(src: &[u8], comments: impl Iterator<Item = (usize, usize)>) -> Vec<Sp
             .split(|c: char| !c.is_ascii_alphanumeric())
             .filter(|w| !w.is_empty())
             .collect();
-        let lower = text.to_lowercase();
         let found = ["TODO", "FIXME", "HACK", "XXX"]
             .into_iter()
             .find(|m| words.contains(m))
             .or_else(|| {
+                let lower = text.to_lowercase();
                 ["do not touch", "don't touch", "dont touch"]
                     .into_iter()
                     .find(|m| lower.contains(m))
@@ -703,18 +668,9 @@ fn markers(src: &[u8], comments: impl Iterator<Item = (usize, usize)>) -> Vec<Sp
             });
         if let Some(marker) = found {
             out.push(Span {
-                kind: "marker",
                 name: Some(marker.to_owned()),
-                line: line_of(&line_starts, start),
-                end_line: line_of(&line_starts, end.saturating_sub(1).max(start)),
-                tokens: 0,
                 comments: int(words.len()),
-                params: None,
-                hash: 0,
-                errors: None,
-                start_byte: int(start),
-                end_byte: int(end),
-                depth: 0,
+                ..Span::over("marker", start..end, starts)
             });
         }
     }
@@ -736,6 +692,27 @@ fn line_starts(src: &[u8]) -> Vec<usize> {
 /// The 1-based line of `byte`.
 fn line_of(starts: &[usize], byte: usize) -> i32 {
     int(starts.partition_point(|&s| s <= byte))
+}
+
+impl Span {
+    /// A span of `kind` over `bytes` with no counts: its lines are those of its first
+    /// and last byte (the start's, if it has none), given the `starts` of the lines.
+    fn over(kind: &'static str, bytes: Range<usize>, starts: &[usize]) -> Span {
+        Span {
+            kind,
+            name: None,
+            line: line_of(starts, bytes.start),
+            end_line: line_of(starts, bytes.end.saturating_sub(1).max(bytes.start)),
+            tokens: 0,
+            comments: 0,
+            params: None,
+            hash: 0,
+            errors: None,
+            start_byte: int(bytes.start),
+            end_byte: int(bytes.end),
+            depth: 0,
+        }
+    }
 }
 
 /// Facts about one function beyond its span, each a span over the function's bytes:
@@ -907,7 +884,7 @@ pub const CLONE_W: usize = 21;
 
 /// `fingerprint` spans: the winnowed hashes of every CLONE_K-token window of the
 /// code leaves, each over the bytes of its window, `tokens` CLONE_K.
-fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<Span> {
+fn fingerprints(lang: Lang, leaves: &[(usize, usize, u16)], starts: &[usize]) -> Vec<Span> {
     // Manifests (selected by file name, no extension) are no code.
     if leaves.len() < CLONE_K || lang.exts.is_empty() {
         return vec![];
@@ -936,8 +913,6 @@ fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<S
             .wrapping_add(token(&leaves[i]));
         hashes.push(mix(rolling));
     }
-    let starts = line_starts(src);
-    let line = |byte: usize| line_of(&starts, byte);
     let mut picked: Vec<usize> = Vec::new();
     let w = CLONE_W.min(hashes.len());
     // The rightmost minimum of each window of `w` hashes, by a monotone queue: the
@@ -965,18 +940,9 @@ fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<S
         .map(|i| {
             let (start, end) = (leaves[i].0, leaves[i + CLONE_K - 1].1);
             Span {
-                kind: "fingerprint",
-                name: None,
-                line: line(start),
-                end_line: line(end.saturating_sub(1).max(start)),
                 tokens: int(CLONE_K),
-                comments: 0,
-                params: None,
                 hash: hashes[i],
-                errors: None,
-                start_byte: int(start),
-                end_byte: int(end),
-                depth: 0,
+                ..Span::over("fingerprint", start..end, starts)
             }
         })
         .collect()
@@ -995,12 +961,10 @@ fn impl_name(node: Node, text: &impl Fn(Node) -> String) -> Option<String> {
     })
 }
 
-/// A span to emit: its start and end (byte and point), the node it was captured
-/// as (none for test spans, which start at an attribute and end with its item),
-/// its name and its parameter list.
+/// A span to emit (keyed by its kind and bytes): the node it was captured as (none
+/// for test spans, which start at an attribute and end with its item), its name and
+/// its parameter list.
 struct Captured {
-    start: (usize, Point),
-    end: (usize, Point),
     node: Option<At>,
     name: Option<String>,
     params: Option<At>,
@@ -1014,7 +978,7 @@ struct Captured {
 /// then decides is test-only (`test_feature` in helpers.sql, or declared in
 /// .gitattributes). An outer attribute applies to the next item, a sibling in the
 /// syntax tree; an inner one (`#![cfg(test)]`) to the item or file containing it.
-fn test_gate(attr: Node, text: &impl Fn(Node) -> String) -> Option<(Gate, Range<(usize, Point)>)> {
+fn test_gate(attr: Node, text: &impl Fn(Node) -> String) -> Option<(Gate, Range<usize>)> {
     let attribute = attr.named_child(0).filter(|a| a.kind() == "attribute")?;
     let path = text(attribute.named_child(0)?);
     let last = path.rsplit("::").next().unwrap_or_default();
@@ -1053,16 +1017,16 @@ fn test_gate(attr: Node, text: &impl Fn(Node) -> String) -> Option<(Gate, Range<
                 .unwrap_or(parent),
         };
         let start = match item.kind() {
-            "source_file" => (0, Point::new(0, 0)),
-            _ => (item.start_byte(), item.start_position()),
+            "source_file" => 0,
+            _ => item.start_byte(),
         };
-        start..(item.end_byte(), item.end_position())
+        start..item.end_byte()
     } else {
         let mut item = attr.next_named_sibling()?;
         while item.kind().ends_with("attribute_item") || item.kind().ends_with("comment") {
             item = item.next_named_sibling()?;
         }
-        (attr.start_byte(), attr.start_position())..(item.end_byte(), item.end_position())
+        attr.start_byte()..item.end_byte()
     };
     Some((gate, range))
 }
