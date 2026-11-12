@@ -18,13 +18,30 @@ pub struct Lang {
 }
 
 /// Every span kind a query may capture, besides `file`, which every blob gets. The
-/// helper captures `@comment`, `@name`, `@params` and `@_*` (for predicates) create
+/// helper captures `@comment`, `@name`, `@params`, `@attr` (attributes, which may
+/// mark test code) and `@_*` (for predicates) create
 /// no span. A query capturing anything else fails to compile, so a typo cannot
 /// silently create a kind no SQL reads.
 #[rustfmt::skip]
 pub const KINDS: &[&str] = &[
     "fn", "call", "import", "module", "pub", "static", "branch", "condition", "block",
     "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
+    // Panics by intent: a stated invariant (assert, unreachable), a fallible operation
+    // left unhandled (Rust unwrap, expect), unfinished code (todo, NotImplementedError).
+    // Those that exit non-locally are also captured as `throw`.
+    "invariant", "unhandled", "unfinished",
+    // What qualifies the names of the functions inside: a Rust impl or trait, a class,
+    // a C++ namespace.
+    "scope",
+    // Rust: a module declared without a body (`mod x;`), whose code is in another file.
+    "mod_decl",
+    // Not captured by a query: code compiled only for tests (`test`), or only when
+    // test-only features are on (`test_if`, named by the features), from `@attr`.
+    "test", "test_if",
+    // Not captured by a query: a winnowed hash of a window of tokens, for clones; a
+    // pass-through function, a documented one and a function's vocabulary
+    // (`function_extras` in extract.rs); a TODO/FIXME/HACK comment.
+    "fingerprint", "forward", "doc", "vocabulary", "marker",
     // Not captured by a query: codevitals marks a blob of generated code with it.
     "generated",
 ];
@@ -78,13 +95,19 @@ impl Lang {
     /// The compiled query, memoized: compiling costs up to 13 ms (C++), far more
     /// than parsing a typical file. It depends only on `LANGS`, so `extract` stays pure.
     pub(crate) fn compiled_query(self) -> &'static Query {
-        static QUERIES: OnceLock<Vec<Query>> = OnceLock::new();
-        let queries = QUERIES.get_or_init(|| {
+        // One cell per language, compiled on first use: a scan of one language pays for
+        // its query only.
+        static QUERIES: [OnceLock<Query>; LANGS.len()] = [const { OnceLock::new() }; LANGS.len()];
+        let i = LANGS
+            .iter()
+            .position(|l| l.name == self.name)
+            .expect("lang is in LANGS");
+        QUERIES[i].get_or_init(|| {
             let compile = |l: &Lang| {
                 let query = Query::new(&(l.grammar)(), l.query).expect("query compiles");
                 for capture in query.capture_names() {
                     assert!(
-                        ["comment", "name", "params"].contains(capture)
+                        ["comment", "name", "params", "attr"].contains(capture)
                             || capture.starts_with('_')
                             || KINDS.contains(capture),
                         "the {} query captures @{capture}, which is not in KINDS",
@@ -93,11 +116,7 @@ impl Lang {
                 }
                 query
             };
-            LANGS.iter().map(compile).collect()
-        });
-        &queries[LANGS
-            .iter()
-            .position(|l| l.name == self.name)
-            .expect("lang is in LANGS")]
+            compile(&LANGS[i])
+        })
     }
 }

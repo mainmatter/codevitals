@@ -8,5 +8,14 @@
 (binary_expression operator: ["&&" "||"]) @condition
 (block) @block
 (static_item (mutable_specifier)) @global_state
+;; Non-local exits (exceptions), and the same split by intent (invariant, unfinished,
+;; unhandled): a panic can be both.
 (macro_invocation macro: (identifier) @_m (#match? @_m "^(panic|unreachable|todo|unimplemented)$")) @throw
 (call_expression function: (field_expression field: (field_identifier) @_f) (#match? @_f "^(unwrap|expect)$")) @throw
+(macro_invocation macro: (identifier) @name (#match? @name "^(debug_)?assert(_eq|_ne)?$|^unreachable$")) @invariant
+(macro_invocation macro: (identifier) @_m (#match? @_m "^(todo|unimplemented)$")) @unfinished
+(call_expression function: (field_expression field: (field_identifier) @_f) (#match? @_f "^(unwrap|expect)$")) @unhandled
+(mod_item name: (identifier) @name !body) @mod_decl
+[(attribute_item) (inner_attribute_item)] @attr
+(impl_item type: (_) @name) @scope
+(trait_item name: (_) @name) @scope

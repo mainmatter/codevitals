@@ -7,13 +7,17 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use duckdb::types::{TimeUnit, Value};
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{Connection, params};
 use gix::ObjectId;
 use gix::object::tree::diff::ChangeDetached as Change;
+use rayon::prelude::*;
 use tracing::{debug, info};
+
+use codevitals::Lang;
 
 use crate::attributes::Attributes;
 use crate::db::{BATCH, oid};
+use crate::parse::parseable;
 
 /// Extend `commits` and `changes` with REV's first-parent chain past the stored tip.
 pub fn walk(
@@ -22,13 +26,7 @@ pub fn walk(
     repo: &gix::Repository,
     rev: &str,
 ) -> Result<(usize, usize)> {
-    let tip = db
-        .query_row(
-            "select seq, id from commits order by seq desc limit 1",
-            [],
-            |r| Ok((r.get::<_, i32>(0)?, oid(&r.get::<_, String>(1)?))),
-        )
-        .optional()?;
+    let tip = crate::db::stored_tip(db)?.map(|(seq, id)| (seq, oid(&id)));
     let find = |id: ObjectId| {
         repo.find_commit(id).with_context(|| match repo.is_shallow().unwrap_or(false) {
             true => format!(
@@ -39,16 +37,7 @@ pub fn walk(
         })
     };
 
-    let head = repo
-        .rev_parse_single(rev)
-        .and_then(|r| Ok(r.object()?.peel_to_commit()?.id))
-        .map_err(anyhow::Error::from)
-        .with_context(|| {
-            format!(
-                "resolve {rev:?} to a commit; pass a branch, tag or commit id with --rev \
-                 (a repository whose HEAD has no commits, such as a jj workspace, needs one)"
-            )
-        })?;
+    let head = commit(repo, rev)?.id;
     // New commits, newest first.
     let mut chain = Vec::new();
     let mut next = Some(head);
@@ -89,38 +78,36 @@ pub fn walk(
 
     let mut changes = 0;
     let mut seq = stored;
+    let shared = repo.clone().into_sync();
     for batch in chain.rchunks(BATCH) {
         // Appenders join the open transaction, so each commit row and its changes land together.
         let tx = db.transaction()?;
         let mut commits = tx.appender("commits")?;
         let mut changed = tx.appender("changes")?;
-        for &id in batch.iter().rev() {
-            let diffing = Instant::now();
-            let commit = find(id)?;
-            let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
-            let (time, author, message) = (|| -> Result<_> {
-                let author = commit.author()?;
-                Ok((
-                    Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
-                    format!("{} <{}>", author.name, author.email),
-                    commit.message_raw()?.to_string(),
-                ))
-            })()
-            .with_context(|| format!("read commit {id}"))?;
-            commits.append_row(params![seq, id.to_string(), time, author, message])?;
-            for (path, blob) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
-                attributes.set(path, blob.as_deref().map(read).transpose()?);
+        // Commits diff independently, so in parallel, each worker with its own handle;
+        // rows are then appended in order, as .gitattributes carry over between commits.
+        let diffed: Vec<Diffed> = batch
+            .par_iter()
+            .rev()
+            .map_init(
+                || shared.to_thread_local(),
+                |repo, &id| -> Result<Diffed> {
+                    let commit = repo.find_commit(id)?;
+                    let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
+                    Ok((id, rows, commit_row(&commit)?))
+                },
+            )
+            .collect::<Result<_>>()?;
+        for (id, rows, (time, name, email, message)) in diffed {
+            commits.append_row(params![seq, id.to_string(), time, name, email, message])?;
+            for (path, row) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
+                attributes.set(path, row.blob.as_deref().map(read).transpose()?);
             }
-            for (path, blob) in &rows {
-                let attr = match blob {
-                    Some(_) => attributes
-                        .role(path)
-                        .with_context(|| format!("commit {id}"))?,
-                    None => None,
-                };
-                changed.append_row(params![seq, path, blob, attr])?;
+            for (path, row) in &rows {
+                append_change(&mut changed, seq, path, row, &attributes)
+                    .with_context(|| format!("commit {id}"))?;
             }
-            debug!(seq, %id, changes = rows.len(), elapsed = ?diffing.elapsed(), "commit");
+            debug!(seq, %id, changes = rows.len(), "commit");
             seq += 1;
             changes += rows.len();
         }
@@ -130,20 +117,142 @@ pub fn walk(
         tx.commit()?;
         info!("walk: {}/{} commits", seq - stored, chain.len());
     }
-    info!(commits = chain.len(), changes, elapsed = ?started.elapsed(), "walk done");
+    let entries = mailmap(db, repo, head)?;
+    info!(commits = chain.len(), changes, mailmap = entries, elapsed = ?started.elapsed(), "walk done");
     Ok((chain.len(), changes))
 }
 
+/// The commit `rev` (a branch, tag, commit id, `HEAD~3`, ...) names.
+pub fn commit<'r>(repo: &'r gix::Repository, rev: &str) -> Result<gix::Commit<'r>> {
+    repo.rev_parse_single(rev)
+        .map_err(anyhow::Error::from)
+        .and_then(|r| Ok(r.object()?.peel_to_commit()?))
+        .with_context(|| {
+            format!(
+                "resolve {rev:?} to a commit; pass a branch, tag or commit id \
+                 (a repository whose HEAD has no commits, such as a jj workspace, needs one)"
+            )
+        })
+}
+
+/// Replaces `mailmap` with the entries of `.mailmap` at the scanned revision (none
+/// when it has none). Lines that do not parse are skipped, as git skips them.
+fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Result<usize> {
+    let tree = repo.find_commit(head)?.tree()?;
+    let content = match tree.lookup_entry_by_path(".mailmap")? {
+        Some(entry) if entry.mode().is_blob() => entry.object()?.detach().data,
+        _ => Vec::new(),
+    };
+    let text = |s: Option<&gix::bstr::BStr>| s.map(|s| s.to_string());
+    let tx = db.transaction()?;
+    tx.execute("delete from mailmap", [])?;
+    let mut rows = tx.appender("mailmap")?;
+    let mut count = 0;
+    for (line, entry) in gix::mailmap::parse_ignore_errors(&content).enumerate() {
+        rows.append_row(params![
+            line,
+            text(entry.new_name()),
+            text(entry.new_email()),
+            text(entry.old_name()),
+            entry.old_email().to_string()
+        ])?;
+        count += 1;
+    }
+    rows.flush()?;
+    drop(rows);
+    tx.commit()?;
+    Ok(count)
+}
+
+/// A diffed commit: its id, changes, time, author name and email, and message.
+type Diffed = (ObjectId, BTreeMap<String, Row>, CommitRow);
+
+/// A `commits` row after its seq and id: the commit time, author name and email,
+/// and message.
+pub type CommitRow = (Value, String, String, String);
+
+pub fn commit_row(commit: &gix::Commit) -> Result<CommitRow> {
+    let author = commit.author()?;
+    Ok((
+        Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
+        author.name.to_string(),
+        author.email.to_string(),
+        commit.message_raw()?.to_string(),
+    ))
+}
+
+/// Appends the `changes` row of `path` at commit `seq`: a present file gets its role
+/// and test features from `attributes`, a deleted one neither.
+pub fn append_change(
+    changes: &mut duckdb::Appender,
+    seq: i32,
+    path: &str,
+    row: &Row,
+    attributes: &Attributes,
+) -> Result<()> {
+    let (role, test_features) = match row.blob {
+        Some(_) => (attributes.role(path)?, attributes.test_features(path)),
+        None => (None, None),
+    };
+    let (added, deleted) = row.lines.unzip();
+    changes.append_row(params![
+        seq,
+        path,
+        row.blob,
+        role,
+        test_features,
+        row.source,
+        added,
+        deleted
+    ])?;
+    Ok(())
+}
+
+/// A commit's change to one path.
+#[derive(Default)]
+pub struct Row {
+    /// The new blob, `None` when the file is gone.
+    pub blob: Option<String>,
+    /// The path the file was renamed from.
+    pub source: Option<String>,
+    /// The blob the change replaces, to count lines against.
+    pub old: Option<String>,
+    /// Lines added and deleted; `None` for a file codevitals does not parse (see
+    /// `parse::parseable`), and for the deletion a rename implies.
+    pub lines: Option<(i32, i32)>,
+}
+
 /// A commit's changes against its first parent (the root's against the empty tree):
-/// each changed path with its new blob, `None` when the file is gone.
-fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String, Option<String>>> {
+/// each changed path with its new blob and, for a rename, its source path, which
+/// gets a row of its own as deleted. Renames are detected as git does by default:
+/// a deleted and an added file at least 50% similar.
+fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String, Row>> {
     // The chain walk already found every parent, so a shallow boundary cannot hide one here.
     let prev = match commit.parent_ids().next() {
         Some(p) => repo.find_commit(p)?.tree()?,
         None => repo.empty_tree(),
     };
+    diff_trees(repo, &prev, &commit.tree()?)
+}
+
+/// The changes from tree `prev` to `tree`, as `diff` describes them.
+pub fn diff_trees(
+    repo: &gix::Repository,
+    prev: &gix::Tree,
+    tree: &gix::Tree,
+) -> Result<BTreeMap<String, Row>> {
     let mut rows = BTreeMap::new();
-    for c in repo.diff_tree_to_tree(&prev, &commit.tree()?, gix::diff::Options::default())? {
+    let mut insert = |path: String, row: Row| {
+        ensure!(
+            !rows.contains_key(&path),
+            "two changes for the path {path:?}"
+        );
+        rows.insert(path, row);
+        Ok(())
+    };
+    let mut options = gix::diff::Options::default();
+    options.track_rewrites(Some(gix::diff::Rewrites::default()));
+    for c in repo.diff_tree_to_tree(prev, tree, options)? {
         let (old, new) = match c {
             Change::Addition { .. } => (None, file(c.entry_mode_and_id())),
             Change::Deletion { .. } => (file(c.entry_mode_and_id()), None),
@@ -151,23 +260,94 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
                 file(c.source_entry_mode_and_id()),
                 file(c.entry_mode_and_id()),
             ),
-            Change::Rewrite { .. } => unreachable!("rename tracking is off"),
+            Change::Rewrite {
+                ref source_location,
+                copy,
+                ..
+            } => {
+                let (old, new) = (
+                    file(c.source_entry_mode_and_id()),
+                    file(c.entry_mode_and_id()),
+                );
+                match (old.is_some(), new.is_some()) {
+                    (true, true) => {
+                        let source = path_text(source_location);
+                        if !copy {
+                            insert(source.clone(), Row::default())?;
+                        }
+                        let row = Row {
+                            blob: new,
+                            source: Some(source),
+                            old,
+                            lines: None,
+                        };
+                        insert(path_text(c.location()), row)?;
+                        continue;
+                    }
+                    // A symlink or submodule on either side: no file was renamed.
+                    _ => {
+                        if old.is_some() && !copy {
+                            let row = Row {
+                                old,
+                                ..Row::default()
+                            };
+                            insert(path_text(source_location), row)?;
+                        }
+                        (None, new)
+                    }
+                }
+            }
         };
         if old != new {
-            let path = path_text(c.location());
-            ensure!(
-                !rows.contains_key(&path),
-                "two changes for the path {path:?}"
-            );
-            rows.insert(path, new);
+            let row = Row {
+                blob: new,
+                old,
+                ..Row::default()
+            };
+            insert(path_text(c.location()), row)?;
+        }
+    }
+    for (path, row) in rows.iter_mut() {
+        let renamed_away = row.blob.is_none() && row.old.is_none();
+        if renamed_away || Lang::of(path).is_none() {
+            continue;
+        }
+        let (old, new) = (
+            read(repo, row.old.as_deref())?,
+            read(repo, row.blob.as_deref())?,
+        );
+        let lang = Lang::of(path).expect("checked above");
+        let parseable =
+            |src: &Option<Vec<u8>>| src.as_deref().is_none_or(|src| parseable(lang, src));
+        if parseable(&old) && parseable(&new) {
+            row.lines = Some(line_changes(
+                old.as_deref().unwrap_or_default(),
+                new.as_deref().unwrap_or_default(),
+            ));
         }
     }
     Ok(rows)
 }
 
+/// The bytes of `blob`, if there is one.
+pub fn read(repo: &gix::Repository, blob: Option<&str>) -> Result<Option<Vec<u8>>> {
+    blob.map(|id| Ok(repo.find_blob(oid(id))?.take_data()))
+        .transpose()
+}
+
+/// Lines added and deleted from `old` to `new`, as `git diff --numstat` counts them
+/// (Myers' algorithm, so counts may differ from git's in rare ties).
+fn line_changes(old: &[u8], new: &[u8]) -> (i32, i32) {
+    use gix::diff::blob::{Algorithm, Diff, InternedInput};
+    let input = InternedInput::new(old, new);
+    let diff = Diff::compute(Algorithm::Myers, &input);
+    let int = |n: u32| i32::try_from(n).expect("line counts fit in i32");
+    (int(diff.count_additions()), int(diff.count_removals()))
+}
+
 /// A path as text: as is when it is UTF-8, else with each byte of an invalid
 /// sequence written `\xNN`, so distinct paths stay distinct.
-fn path_text(path: &[u8]) -> String {
+pub fn path_text(path: &[u8]) -> String {
     path.utf8_chunks().fold(String::new(), |mut text, chunk| {
         text.push_str(chunk.valid());
         for b in chunk.invalid() {

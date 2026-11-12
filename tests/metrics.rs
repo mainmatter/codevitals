@@ -2,6 +2,8 @@
 //! and properties on synthetic facts written straight into the database.
 
 mod common;
+#[path = "common/samples.rs"]
+mod samples;
 
 use std::path::Path;
 
@@ -27,37 +29,41 @@ fn metric_views() {
             "select seq, value, files from metrics.size",
             "(0,18,1) (1,36,2) (2,36,2) (3,45,3)",
         ),
-        // Both windows hold c1 (a.rs and src/b.rs: 1 step apart) and c2 (src/b.rs and
-        // src/c.rs: 0 steps): observed 1/2. The window's files a.rs, src/b.rs, src/c.rs
-        // are 1, 1 and 0 steps apart pairwise: chance gives 2/3.
+        // c2 renames src/b.rs to src/c.rs: one change, so only c1 (a.rs and src/b.rs:
+        // 1 step apart) changes two files, as far apart as its window's two files.
         (
             "select seq, round(value, 4), observed, round(expected, 4), commits from metrics.co_change_distance",
-            "(2,0.75,0.5,0.6667,2) (3,0.75,0.5,0.6667,2)",
+            "(2,1.0,1.0,1.0,1) (3,1.0,1.0,1.0,1)",
         ),
-        // Only a.rs at c1 changed again within 7 days (one day after c0).
+        // Only a.rs at c1 changed again within 7 days (one day after c0); the rename at
+        // c2 moves src/b.rs without editing it.
         (
             "select seq, value, commits, modifications from metrics.rework",
             "(2,1.0,1,1) (3,1.0,1,1)",
         ),
-        // Window c0..c2: a.rs 1 + 1/2, src/b.rs 1/2 + 1/2, src/c.rs 1/2, so 1 / sum p^2 = 2.5714.
-        // Window c1..c3: a.rs 1/2, src/b.rs 1, src/c.rs 1/2, d.rs 1, so 3.6.
+        // src/b.rs and src/c.rs are one lineage (b). Window c0..c2: a.rs 1 + 1/2, b 1/2 + 1,
+        // so 1 / sum p^2 = 2. Window c1..c3: a.rs 1/2, b 3/2, d.rs 1, so 2.5714.
         (
             "select seq, round(value, 4), round(files_per_commit, 4), round(rust, 4) from metrics.change_entropy",
-            "(2,2.5714,1.6667,2.5714) (3,3.6,1.6667,3.6)",
+            "(2,2.0,1.3333,2.0) (3,2.5714,1.3333,2.5714)",
+        ),
+        // Files per commit in each window: c0 1, c1 2, c2 1 (the rename is one); c3 1.
+        (
+            "select seq, round(value, 4), p90, max, commits from metrics.change_span",
+            "(2,1.3333,2,2,3) (3,1.3333,2,2,3)",
         ),
         // No function is pub, so all function tokens are non-public.
         (
             "select seq, value, by_language from metrics.encapsulation",
             "(0,1.0,{rust=1.0}) (1,1.0,{rust=1.0}) (2,1.0,{rust=1.0}) (3,1.0,{rust=1.0})",
         ),
-        // No function exceeds 200 tokens, none reaches the 50 tokens duplication counts.
+        // No function exceeds 200 tokens.
         (
             "select seq, value from metrics.concentration",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
-        ("select count(*) as seq from metrics.duplication", "(0)"),
-        // Window c0..c2: a.rs (c0, c1) and src/b.rs (c1, c2) each changed only by t.
-        // Window c1..c3: only src/b.rs changes twice.
+        // Window c0..c2: a.rs (c0, c1) and lineage src/b.rs, src/c.rs (c1, c2) each
+        // changed only by t. Window c1..c3: only that lineage changes twice.
         (
             "select seq, value, files from metrics.ownership",
             "(2,1.0,2) (3,1.0,1)",
@@ -71,6 +77,15 @@ fn metric_views() {
         (
             "select seq, value from metrics.decisions",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
+        ),
+        // Parameters: add (2), then plus (2), then d (0); nine in ten take at most 2.
+        (
+            "select seq, value, max, share, functions from metrics.function_params",
+            "(0,2,2,0.0,1) (1,2,2,0.0,2) (2,2,2,0.0,2) (3,2,2,0.0,3)",
+        ),
+        (
+            "select seq, value, max from metrics.function_decisions",
+            "(0,0,0) (1,0,0) (2,0,0) (3,0,0)",
         ),
         (
             "select seq, value from metrics.global_state",
@@ -142,7 +157,7 @@ fn export() {
     let all = succeeds(dir, &["metrics", "-"]);
     assert!(
         all.starts_with(r#"{"size":["#)
-            && all.contains(r#""duplication":[]"#)
+            && all.contains(r#""goto":[]"#)
             && all.contains(r#""by_language":{"rust":1.0}"#),
         "{all}"
     );
@@ -287,8 +302,8 @@ fn inert_commits_leave_past_windows_unchanged() {
     execute(
         &dir,
         "insert into commits values
-           (300, 'bulk', timestamp '2026-01-01' + to_days(320), 't <t@t>', 'bulk'),
-           (301, 'lone', timestamp '2026-01-01' + to_days(321), 't <t@t>', 'lone');
+           (300, 'bulk', timestamp '2026-01-01' + to_days(320), 't', 't@t', 'bulk'),
+           (301, 'lone', timestamp '2026-01-01' + to_days(321), 't', 't@t', 'lone');
          insert into changes (seq, path, blob) select 300, 'bulk/b' || i || '.rs', 'bulk' || i from range(40) r(i);
          insert into changes (seq, path, blob) values (301, 'lone/x.rs', 'lone');
          insert into spans (blob, v, lang, kind, line, tokens)
@@ -311,7 +326,6 @@ fn renaming_identifiers_changes_no_structural_metric() {
     for m in [
         "metrics.size",
         "metrics.encapsulation",
-        "metrics.duplication",
         "metrics.concentration",
     ] {
         let q = format!("select * from {m} order by seq");
@@ -321,40 +335,14 @@ fn renaming_identifiers_changes_no_structural_metric() {
     assert_ne!(rows(&renamed.dir, names), rows(&original.dir, names));
 }
 
-const RUST_STRUCTURE: &str = "static mut COUNT: i32 = 0;
-fn f(x: Option<i32>) -> i32 {
-    if x.is_some() && x.unwrap() > 0 {
-        for i in 0..3 {
-            if i == 1 || i == 2 { panic!(\"no\"); }
-        }
-    } else if x.is_none() {
-        return x.expect(\"e\");
-    }
-    match x { Some(v) => v, None => 0 }
-}
-";
-
-const C_STRUCTURE: &str = "int counter = 0;
-static int cache[4];
-const int limit = 3;
-extern int shared;
-int f(int a) {
-    if (a > 0 && a < limit) {
-        while (a--) { if (a == 2) goto done; }
-    } else if (a == 0) { longjmp(env, 1); }
-    switch (a) { case 1: return 1; default: return a ? 2 : 3; }
-done:
-    return 0;
-}
-";
-
 /// Per-blob structure facts, checked by hand on the samples whose spans
 /// `tests/extract.rs` pins: decisions are branches plus conditions, and nesting is
 /// the deepest block below the function body.
 #[test]
 fn blob_facts_count_structure() {
     let mut r = fixture();
-    r.write("x.rs", RUST_STRUCTURE).write("x.c", C_STRUCTURE);
+    r.write("x.rs", samples::RUST_STRUCTURE)
+        .write("x.c", samples::C_STRUCTURE);
     r.extend("structure\n", 5);
     scan(&r.dir, "main");
     let facts = |path: &str| {
@@ -375,53 +363,61 @@ fn blob_facts_count_structure() {
     assert_eq!(facts("x.c"), "(8,2,1,1,2.0,0)");
 }
 
-/// `code_totals` and `duplication`, built from change points, equal computing them
+/// `code_totals`, built from change points, equals computing it
 /// from the live files commit by commit, through additions, a modification that
 /// breaks a structural twin, a deletion and a rename.
 #[test]
 fn change_points_match_per_commit_sums() {
     let mut r = fixture();
-    r.write("x.rs", RUST_STRUCTURE)
-        .write("twin.rs", RUST_STRUCTURE);
+    r.write("x.rs", samples::RUST_STRUCTURE)
+        .write("twin.rs", samples::RUST_STRUCTURE);
     r.extend("add rust\n", 5);
-    r.write("x.c", C_STRUCTURE);
+    r.write("x.c", samples::C_STRUCTURE);
     r.extend("add c\n", 6);
     r.write(
         "x.rs",
-        RUST_STRUCTURE.replace("        for i in 0..3 {\n", "        {\n"),
+        samples::RUST_STRUCTURE.replace("        for i in 0..3 {\n", "        {\n"),
     );
     r.extend("modify rust\n", 7);
     r.remove("x.c");
     r.extend("delete c\n", 8);
-    r.remove("x.rs").write("src/y.rs", RUST_STRUCTURE);
+    r.remove("x.rs").write("src/y.rs", samples::RUST_STRUCTURE);
     r.extend("rename rust\n", 9);
     scan(&r.dir, "main");
     // Every fact of every live production file, summed commit by commit.
-    let naive = "select c.seq, f.lang, sum(columns(f.* exclude (blob, lang)))
+    let naive = "select c.seq, f.lang, sum(columns(f.* exclude (blob, test_features, lang)))
          from commits c join files l on l.since <= c.seq and c.seq < l.until
          join path_roles p on p.path = l.path and p.role = 'code'
-         join blob_facts f on f.blob = l.blob
+         join blob_facts f on f.blob = l.blob and f.test_features = l.test_features
          group by all order by all";
     let expected = rows(&r.dir, naive);
     let actual = rows(&r.dir, "select * from code_totals order by all");
     assert_eq!(actual, expected);
-    let naive_duplication = "with g as (
-           select c.seq, s.lang, s.hash, sum(s.tokens) as t, count(*) as n
-           from commits c join files l on l.since <= c.seq and c.seq < l.until
-           join path_roles p on p.path = l.path and p.role = 'code'
-           join spans s on s.blob = l.blob and s.kind = 'fn' and s.tokens >= clone_tokens()
-           group by all)
-         select seq, coalesce(sum(t) filter (n > 1), 0) / sum(t) from g group by seq order by seq";
-    let duplication = rows(&r.dir, naive_duplication);
-    assert_rows(
-        &r.dir,
-        "select seq, value from metrics.duplication order by seq",
-        &duplication,
-    );
-    assert!(
-        duplication.contains("(4,1.0)") && duplication.contains("(6,0.0)"),
-        "{duplication}"
-    );
+    // The per-function tails, from histograms by change points, equal the nearest-rank
+    // 90th percentile, maximum and share over the live functions commit by commit.
+    for (measure, threshold) in [
+        ("decisions", "many_decisions()"),
+        ("nesting", "deep_nesting()"),
+        ("params", "many_params()"),
+    ] {
+        let naive = format!(
+            "with f as (
+               select c.seq, x.{measure} as v, x.tokens
+               from commits c join files l on l.since <= c.seq and c.seq < l.until
+               join path_roles p on p.path = l.path and p.role = 'code'
+               join function_facts x on x.blob = l.blob and x.test_features = l.test_features
+               where x.{measure} is not null),
+             r as (select *, row_number() over (partition by seq order by v) as k,
+                          count(*) over (partition by seq) as n from f)
+             select seq, min(v) filter (k >= ceil(0.9 * n)), max(v),
+                    round(coalesce(sum(tokens) filter (v > {threshold}), 0) / sum(tokens), 9)
+             from r group by seq order by seq"
+        );
+        let metric = format!(
+            "select seq, value, max, round(share, 9) from metrics.function_{measure} order by seq"
+        );
+        assert_eq!(rows(&r.dir, &metric), rows(&r.dir, &naive), "{measure}");
+    }
     // Not vacuous: C appears at seq 5 and is gone from seq 7.
     assert!(
         expected.contains("(5,c,1,") && !expected.contains("(7,c,"),
@@ -435,7 +431,7 @@ fn change_points_match_per_commit_sums() {
 /// hubs.
 fn random_imports(modules: u32, files: u32, targets: u32, per_file: u32) -> String {
     format!(
-        "insert into commits values (0, 'c0', timestamp '2026-01-01', 't <t@t>', 'init');
+        "insert into commits values (0, 'c0', timestamp '2026-01-01', 't', 't@t', 'init');
          insert into changes (seq, path, blob) select 0, 'm' || (f % {modules}) || '/f' || f || '.py', 'b' || f from range({files}) g(f);
          insert into spans (blob, v, lang, kind, line, tokens) select 'b' || f, 1, 'python', 'file', 1, 1 from range({files}) g(f);
          insert into spans (blob, v, lang, kind, name, line, start_byte, end_byte)
@@ -561,7 +557,7 @@ fn sql_covers_every_language() {
             names.len(),
             names.join(", ")
         ),
-        "(12,0)",
+        "(14,0)",
     );
     let sql = codevitals::SQL;
     let mut kinds = Vec::new();
@@ -597,13 +593,306 @@ fn sql_covers_every_language() {
 fn commit_times_drop_a_lone_wrong_clock() {
     let dir = facts(
         "insert into commits values
-           (0, 'a', timestamp '2026-01-01', 't', 'x'), (1, 'b', timestamp '1970-01-01', 't', 'x'),
-           (2, 'c', timestamp '2026-01-03', 't', 'x'), (3, 'd', timestamp '2999-01-01', 't', 'x'),
-           (4, 'e', timestamp '2026-01-05', 't', 'x'), (5, 'f', timestamp '2026-01-04', 't', 'x')",
+           (0, 'a', timestamp '2026-01-01', 't', 't@t', 'x'), (1, 'b', timestamp '1970-01-01', 't', 't@t', 'x'),
+           (2, 'c', timestamp '2026-01-03', 't', 't@t', 'x'), (3, 'd', timestamp '2999-01-01', 't', 't@t', 'x'),
+           (4, 'e', timestamp '2026-01-05', 't', 't@t', 'x'), (5, 'f', timestamp '2026-01-04', 't', 't@t', 'x')",
     );
     assert_rows(
         &dir,
         "select seq, time::date from commit_times order by seq",
         "(0,2026-01-01) (1,2026-01-01) (2,2026-01-03) (3,2026-01-05) (4,2026-01-05) (5,2026-01-05)",
     );
+}
+
+/// Rust test code inside production files is subtracted from their facts: a
+/// `#[cfg(test)]` module, a `#[test]` function, code behind a feature that is
+/// test-only by name or declared so in .gitattributes. A module file declared only
+/// for tests (`#[cfg(test)] mod testutil;`) is test code as a whole.
+#[test]
+fn rust_test_code_is_not_production() {
+    let production =
+        "pub fn f(x: Option<i32>) -> i32 {\n    if x.is_some() { x.unwrap() } else { 0 }\n}\n";
+    let tests = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { if true { super::f(None); } let _ = Some(1).unwrap(); }\n}\n\
+                 #[cfg(feature = \"test-util\")]\nfn util() { panic!(); }\n\
+                 #[cfg(feature = \"mock\")]\nfn mocked() { if true { panic!(); } }\n\
+                 #[cfg(test)]\nmod testutil;\n";
+    let mut r = common::Repo::new();
+    r.write("src/plain.rs", production)
+        .write("src/lib.rs", format!("{production}{tests}"))
+        .write("src/testutil.rs", "pub fn helper() { todo!() }\n")
+        .write("mock/src/lib.rs", format!("{production}{tests}"))
+        .write(".gitattributes", "mock/** codevitals-test-features=mock\n");
+    r.commit("main", "c0\n", 0, &[]);
+    scan(&r.dir, "main");
+    let facts = "select r.path, f.files, f.tokens, f.decisions, f.throws, f.fn_tokens
+         from files v join path_roles r using (path)
+         join blob_facts f on f.blob = v.blob and f.test_features = v.test_features
+         where r.role = 'code' order by r.path";
+    let plain = rows(
+        &r.dir,
+        &facts.replace("where", "where r.path = 'src/plain.rs' and"),
+    );
+    let plain = plain.trim_start_matches("(src/plain.rs,");
+    // lib.rs keeps `mocked` (mock is not test-only there); mock/src/lib.rs drops it too.
+    assert_eq!(
+        rows(&r.dir, facts),
+        format!("(mock/src/lib.rs,{plain} (src/lib.rs,1,58,2,2,47) (src/plain.rs,{plain}")
+    );
+    assert_rows(
+        &r.dir,
+        "select path, role from path_roles where path like 'src/test%'",
+        "(src/testutil.rs,test)",
+    );
+}
+
+/// Per-unit tables: functions keep their identity across edits and file renames,
+/// are told apart by scope and ordinal, and sum to the per-blob facts; `cv units`
+/// exports one commit's files and functions.
+#[test]
+fn units_follow_files_and_functions() {
+    let v1 = "struct A;\nimpl A {\n    pub fn new() -> A { A }\n}\nimpl Clone for A {\n    fn clone(&self) -> A { if true { A } else { A } }\n}\n\
+              #[cfg(unix)]\nfn os() {}\n#[cfg(windows)]\nfn os() {}\n";
+    let mut r = common::Repo::new();
+    r.write("a.rs", v1);
+    r.commit("main", "c0\n", 0, &[]);
+    r.write(
+        "a.rs",
+        v1.replace("{ A } else { A }", "{ A } else if false { A } else { A }"),
+    );
+    r.extend("edit\n", 1);
+    r.remove("a.rs").write(
+        "src/a.rs",
+        v1.replace("{ A } else { A }", "{ A } else if false { A } else { A }"),
+    );
+    r.extend("move\n", 2);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        "select since, path, function, decisions, public from units.functions order by since, start_byte",
+        "(0,a.rs,0:a.rs A::new,0,true) (0,a.rs,0:a.rs <A as Clone>::clone,1,false) (0,a.rs,0:a.rs os,0,false) (0,a.rs,0:a.rs os#2,0,false) \
+         (1,a.rs,0:a.rs A::new,0,true) (1,a.rs,0:a.rs <A as Clone>::clone,2,false) (1,a.rs,0:a.rs os,0,false) (1,a.rs,0:a.rs os#2,0,false) \
+         (2,src/a.rs,0:a.rs A::new,0,true) (2,src/a.rs,0:a.rs <A as Clone>::clone,2,false) (2,src/a.rs,0:a.rs os,0,false) (2,src/a.rs,0:a.rs os#2,0,false)",
+    );
+    // Functions add up to their file's facts.
+    assert_rows(
+        &r.dir,
+        "select f.since, f.fn_tokens = sum(u.tokens), f.decisions = sum(u.decisions)
+         from units.files f join units.functions u using (path, since)
+         group by f.since, f.fn_tokens, f.decisions order by 1",
+        "(0,true,true) (1,true,true) (2,true,true)",
+    );
+    let first = rev(&r.dir, "main~2");
+    let out = succeeds(&r.dir, &["units", "-", "--rev", &first[..8]]);
+    assert!(
+        out.starts_with(&format!(
+            r#"{{"seq":0,"id":"{first}","files":[{{"path":"a.rs","lineage":"0:a.rs","#
+        )),
+        "{out}"
+    );
+    assert_eq!(out.matches(r#""function":"#).count(), 4, "{out}");
+    let err = fails(&r.dir, &["units", "-", "--rev", "ffffffff"]);
+    assert!(err.contains("no scanned commit"), "{err}");
+}
+
+/// Hotspots rank live production files by recent changes times decision points,
+/// following renames; files changed only by bulk commits or long ago count no change.
+#[test]
+fn hotspots_rank_change_times_complexity() {
+    let busy = |n: usize| {
+        format!(
+            "fn f(x: i32) -> i32 {{\n    if x > {n} {{ 1 }} else {{ 2 }}\n}}\n\nfn a() {{}}\n\nfn b() {{}}\n"
+        )
+    };
+    let complex = "fn g(x: i32) -> i32 { if x > 1 { if x > 2 { 3 } else { 4 } } else { 5 } }\n";
+    let mut r = common::Repo::new();
+    r.write("busy.rs", busy(0))
+        .write("complex.rs", complex)
+        .write("old.rs", complex);
+    r.commit("main", "c0\n", 0, &[]);
+    for day in 400..404 {
+        r.write("busy.rs", busy(day as usize));
+        r.extend("edit\n", day);
+    }
+    r.remove("busy.rs").write("src/busy.rs", busy(9)); // a rename keeps the count
+    r.write("complex.rs", format!("{complex}\n"));
+    r.extend("move\n", 404);
+    scan(&r.dir, "main");
+    // busy: 5 changes x 1 decision; complex: 1 x 2; old.rs: no change within a year.
+    assert_rows(
+        &r.dir,
+        "select rank, path, changes, decisions, score from units.hotspots order by rank, path",
+        "(1,src/busy.rs,5,1,5) (2,complex.rs,1,2,2) (3,old.rs,0,2,0)",
+    );
+    let text = succeeds(&r.dir, &["hotspots"]);
+    assert!(
+        text.lines()
+            .nth(1)
+            .unwrap()
+            .ends_with("5 changes x    1 decisions  src/busy.rs"),
+        "{text}"
+    );
+    assert_eq!(
+        text.lines().count(),
+        3,
+        "files without recent changes are left out: {text}"
+    );
+}
+
+/// Orphaning: code mostly changed by authors who stopped committing.
+#[test]
+fn orphaning_counts_departed_authors() {
+    let f = |n: u32| format!("fn f(x: i32) -> i32 {{ x + {n} }}\n");
+    let mut r = common::Repo::new();
+    r.author("Old", "old@x")
+        .write("a.rs", f(0))
+        .write("b.rs", f(0));
+    r.commit("main", "c0\n", 0, &[]);
+    r.write("a.rs", f(1));
+    r.extend("c1\n", 1);
+    r.author("New", "new@x");
+    for day in 400..403 {
+        r.write("b.rs", f(day));
+        r.extend("edit b\n", day as i64);
+    }
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 3");
+    // At the last point only New committed in the past year: a.rs has all its changes
+    // by Old (orphaned), b.rs one of four.
+    assert_rows(
+        &r.dir,
+        "select path, changes, orphaned from units.orphaning where seq = 4 order by path",
+        "(a.rs,2,1.0) (b.rs,4,0.25)",
+    );
+    assert_rows(
+        &r.dir,
+        "select seq, value, orphaned_files, files from metrics.orphaning order by seq",
+        "(4,0.5,1,2)",
+    );
+}
+
+/// Accretion: changes that make an existing function branchier or deeper; new
+/// functions and pure moves do not count.
+#[test]
+fn accretion_counts_growth_of_existing_functions() {
+    let mut r = common::Repo::new();
+    let base = "fn f(x: i32) -> i32 {\n    x\n}\n\nfn keep() {}\n\nfn other() {}\n";
+    r.write("a.rs", base);
+    r.commit("main", "c0\n", 0, &[]);
+    let grown = base.to_owned() + "fn g(x: i32) -> i32 {\n    if x > 0 { 1 } else { 2 }\n}\n";
+    r.write("a.rs", &grown); // a new function: no accretion
+    r.extend("add g\n", 1);
+    let deeper = grown.replace("    x\n", "    if x > 1 { x } else { 0 }\n");
+    r.write("a.rs", &deeper); // f gains a decision: accretion
+    r.extend("grow f\n", 2);
+    r.remove("a.rs").write("src/a.rs", &deeper); // a pure move: no touch
+    r.extend("move\n", 3);
+    r.write(
+        "src/a.rs",
+        deeper.replace("fn keep() {}", "fn keep() { let _y = 1; }"),
+    );
+    r.extend("edit keep\n", 4);
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 4");
+    assert_rows(
+        &r.dir,
+        "select seq, path, raised from units.touches order by seq",
+        "(1,a.rs,false) (2,a.rs,true) (4,src/a.rs,false)",
+    );
+    // Window c1..c4: three touches of one lineage, one raising.
+    assert_rows(
+        &r.dir,
+        "select seq, round(value, 4), files, touches from metrics.accretion order by seq",
+        "(4,0.3333,1,3)",
+    );
+}
+
+/// Modularity violations: files changed together often whose imports do not
+/// connect them.
+#[test]
+fn modularity_violations_need_no_import() {
+    let mut r = common::Repo::new();
+    for day in 0..4 {
+        r.write(
+            "pkg/a.py",
+            format!("import pkg.b\n\ndef a():\n    return {day}\n"),
+        )
+        .write("pkg/b.py", format!("def b():\n    return {day}\n"))
+        .write("pkg/c.py", format!("def c():\n    return {day}\n"));
+        match day {
+            0 => r.commit("main", "c0\n", 0, &[]),
+            d => r.extend("edit\n", d),
+        };
+    }
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 4");
+    // a, b and c change together four times; only a and b are connected by an import.
+    assert_rows(
+        &r.dir,
+        "select seq, a, b, commits, imported from units.coupled_pairs order by a, b",
+        "(3,pkg/a.py,pkg/b.py,4,true) (3,pkg/a.py,pkg/c.py,4,false) (3,pkg/b.py,pkg/c.py,4,false)",
+    );
+    assert_rows(
+        &r.dir,
+        "select seq, round(value, 4), violations, pairs, import_coverage from metrics.modularity_violations",
+        "(3,0.6667,2,3,1.0)",
+    );
+}
+
+/// Experimental clones: a function copied with other names is duplicated code.
+#[test]
+fn experimental_clones() {
+    let body = |f: &str, v: &str| {
+        format!(
+            "fn {f}(items: &[i32], {v}: i32) -> i32 {{\n    let mut total = 0;\n    for item in items {{\n        if *item > {v} {{ total += item * 2; }} else {{ total -= 1; }}\n        if *item == {v} {{ return total; }}\n    }}\n    total + {v} * 3\n}}\n"
+        )
+    };
+    let mut r = common::Repo::new();
+    r.write("a.rs", body("sum", "limit"));
+    r.commit("main", "c0\n", 0, &[]);
+    r.write("b.rs", body("total_over", "bound"));
+    r.extend("copy\n", 1);
+    scan(&r.dir, "main");
+    // Read at the tip (both commits fall in one week). Winnowed fingerprints cover most,
+    // not all, of a repeated run.
+    assert_rows(
+        &r.dir,
+        "select seq, value > 0.5, value <= 1, duplicated_tokens > 0 from experimental.clones order by seq",
+        "(1,true,true,true)",
+    );
+    let out = succeeds(&r.dir, &["experimental", "-", "clones"]);
+    assert!(out.starts_with(r#"{"clones":[{"seq":1,"#), "{out}");
+}
+
+/// Experimental structure and documentation metrics on one hand-checked file.
+#[test]
+fn experimental_snapshot_metrics() {
+    let mut r = common::Repo::new();
+    r.write(
+        "a.rs",
+        "/// Reads the input.\npub fn read(path: &str) -> String {\n    load(path)\n}\n\n\
+         pub fn undocumented(x: i32) -> i32 {\n    helper(x) + 1\n}\n\n\
+         fn helper(x: i32) -> i32 {\n    // TODO: faster\n    x * 2\n}\n\n\
+         fn load(p: &str) -> String {\n    p.to_owned()\n}\n",
+    );
+    r.commit("main", "c0\n", 0, &[]);
+    scan(&r.dir, "main");
+    let one = |view: &str, columns: &str| {
+        rows(
+            &r.dir,
+            &format!("select {columns} from experimental.{view}"),
+        )
+    };
+    // read forwards to load.
+    assert_eq!(one("pass_through", "value, count, functions"), "(0.25,1,4)");
+    // helper and load are private, uniquely named and called once each.
+    assert_eq!(
+        one("single_use", "value, count, private_functions"),
+        "(1.0,2,2)"
+    );
+    // One of the two public functions has a doc comment.
+    assert_eq!(
+        one("doc_completeness", "value, documented, public_functions"),
+        "(0.5,1,2)"
+    );
+    assert_eq!(one("markers", "count, files_with_markers"), "(1,1)");
 }

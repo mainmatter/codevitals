@@ -3,6 +3,9 @@
 //! `linguist-documentation`, plus `codevitals=<role>` for any role (`test`, `code`, ...).
 //! An attribute turned off (`-linguist-vendored`, `linguist-generated=false`) says
 //! the path is first-party code whatever its path conventions suggest.
+//! `codevitals-test-features=a,b` declares cargo features that only tests enable:
+//! Rust code behind them counts as test code (beside the names `test_feature` in
+//! helpers.sql recognizes).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -53,11 +56,7 @@ impl Attributes {
         }
     }
 
-    /// The role the attributes give `path`, if any.
-    pub fn role(&self, path: &str) -> Result<Option<&'static str>> {
-        if self.files.is_empty() {
-            return Ok(None);
-        }
+    fn matches(&self, path: &str) -> Outcome {
         let mut out = Outcome::default();
         out.initialize(&self.collection);
         self.search.pattern_matching_relative_path(
@@ -66,6 +65,39 @@ impl Attributes {
             Some(false),
             &mut out,
         );
+        out
+    }
+
+    /// The cargo features declared test-only for `path`, sorted and joined by `,`.
+    pub fn test_features(&self, path: &str) -> Option<String> {
+        if self.files.is_empty() {
+            return None;
+        }
+        let out = self.matches(path);
+        let m = out
+            .iter()
+            .find(|m| m.assignment.name.as_str() == "codevitals-test-features")?;
+        let StateRef::Value(value) = m.assignment.state else {
+            return None;
+        };
+        let mut features: Vec<String> = value
+            .as_bstr()
+            .to_string()
+            .split(',')
+            .map(|f| f.trim().to_owned())
+            .filter(|f| !f.is_empty())
+            .collect();
+        features.sort();
+        features.dedup();
+        (!features.is_empty()).then(|| features.join(","))
+    }
+
+    /// The role the attributes give `path`, if any.
+    pub fn role(&self, path: &str) -> Result<Option<&'static str>> {
+        if self.files.is_empty() {
+            return Ok(None);
+        }
+        let out = self.matches(path);
         // `codevitals` wins over Linguist's attributes; among those, the first listed role does.
         let mut role = None;
         for m in out.iter() {
@@ -121,5 +153,21 @@ mod tests {
         assert_eq!(role(&a, "src/main.rs"), None);
         a.set("third/ours/.gitattributes", None);
         assert_eq!(role(&a, "third/ours/y.c"), Some("vendored"));
+    }
+
+    #[test]
+    fn test_features() {
+        let mut a = Attributes::default();
+        a.set(
+            ".gitattributes",
+            Some(b"crates/x/** codevitals-test-features=mock,fake\ncrates/x/y/** -codevitals-test-features\n".to_vec()),
+        );
+        assert_eq!(
+            a.test_features("crates/x/src/lib.rs").as_deref(),
+            Some("fake,mock")
+        );
+        assert_eq!(a.test_features("crates/x/y/lib.rs"), None);
+        assert_eq!(a.test_features("src/lib.rs"), None);
+        assert_eq!(a.role("crates/x/src/lib.rs").unwrap(), None);
     }
 }

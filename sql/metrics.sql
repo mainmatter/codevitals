@@ -16,8 +16,7 @@ Read: context, not a score. A step marks a bulk commit, which often moves other 
 Trend: size is the strongest single predictor of defects: judge the other trends against it.';
 
 create or replace view metrics.co_change_distance as
-with c as (select * from code_changes
-           qualify count(*) over (partition by seq) between 2 and max_commit_files()),
+with c as (select seq, path from change_weights where k >= 2),
 per_commit as (
   select a.seq, avg(tree_distance(a.path, b.path)) as distance
   from c a join c b on a.seq = b.seq and a.path < b.path group by a.seq),
@@ -55,11 +54,12 @@ Trend: rising means work spreads across the tree: what changes together does not
 create or replace view metrics.rework as
 with v as (
   select x.seq, x.blob,
-         c.time - lag(c.time) over (partition by x.path order by x.seq) as age
+         c.time - lag(c.time) over (partition by x.lineage order by x.seq) as age,
+         x.blob is not distinct from lag(x.blob) over (partition by x.lineage order by x.seq) as moved
   from code_changes x join commit_times c using (seq)),
 per_commit as (
   select seq, avg((age <= to_days(rework_days()))::int) as reworked, count(*) as modifications
-  from v where age is not null and blob is not null group by seq)
+  from v where age is not null and blob is not null and not moved group by seq)
 select w.win as seq, avg(reworked) as value,
        low(reworked) as low, high(reworked) as high,
        count(*) as commits, sum(modifications) as modifications, any_value(w.span_weeks) as span_weeks
@@ -73,14 +73,9 @@ Read: 0.2 means a fifth of a typical commit''s edits rework last week''s code. E
 
 Trend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.';
 
--- Each non-bulk code commit weighs 1, split over its files.
-create or replace view change_weights as
-select seq, path, 1 / count(*) over (partition by seq) as w, count(*) over (partition by seq) as k
-from code_changes
-qualify count(*) over (partition by seq) <= max_commit_files();
-
 create or replace view metrics.change_entropy as
-with f as (select w.win, c.path, sum(c.w) as w from windows w join change_weights c using (seq) group by all),
+with f as (select w.win, c.lineage, any_value(c.path) as path, sum(c.w) as w
+           from windows w join change_weights c using (seq) group by w.win, c.lineage),
 p as (select win, family(path) as family, w / sum(w) over (partition by win) as p,
             w / sum(w) over (partition by win, family(path)) as p_family from f),
 commits as (select w.win, avg(k) as files_per_commit, count(*) as commits, any_value(w.span_weeks) as span_weeks
@@ -100,6 +95,20 @@ Read: 12 means as if spread evenly over 12 files. Files per commit is shown beca
 
 Trend: rising means more places change at once. It predicted faults well in open-source projects (Hassan).';
 
+create or replace view metrics.change_span as
+with commits as (select distinct seq, k from change_weights)
+select w.win as seq, avg(c.k) as value, quantile_disc(c.k, 0.9) as p90, max(c.k) as max,
+       low(c.k) as low, high(c.k) as high, count(*) as commits, any_value(w.span_weeks) as span_weeks
+from windows w join commits c using (seq) group by w.win;
+
+comment on view metrics.change_span is 'CHANGES: Production files per commit
+
+What: how many production files a commit changes, over the last 100 code commits each week: the mean (value), the 90th percentile (p90) and the most (max). Commits of more than 30 files (bulk changes) are left out; a renamed file counts once. Lower is better.
+
+Read: 2.5 means a typical commit touches two to three files; p90 4 means one commit in ten touches more than four. The shaded band is a 95% confidence interval for the mean: movement inside it is noise.
+
+Trend: rising means a change needs edits in more places: what changes together is spread out. It is the files per commit beside change_entropy. Unvalidated.';
+
 create or replace view metrics.encapsulation as
 select seq, sum(private_tokens) / sum(fn_tokens) as value,
        map(list(lang order by lang), list(private_tokens / fn_tokens order by lang)) as by_language,
@@ -114,49 +123,6 @@ What: the share of function code in non-public functions (no pub, static, not ex
 Read: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare each language over time, not languages with each other.
 
 Trend: falling means the public surface grows faster than the code behind it.';
-
--- Change points per structure: each change adds its new contribution, removes its old.
-create or replace view metrics.duplication as
-with f as (
-  select v.since, v.until, s.lang, s.hash, s.tokens
-  from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join spans s on s.blob = v.blob and s.kind = 'fn' and s.tokens >= clone_tokens()),
-d as (
-  select lang, hash, seq, sum(n) as n, sum(t) as t
-  from (select lang, hash, since as seq, 1 as n, tokens as t from f
-        union all select lang, hash, until, -1, -tokens from f)
-  group by all),
-structures as (
-  select lang, hash, seq, t, if(n > 1, t, 0) as duplicated from (
-    select lang, hash, seq, sum(n) over w as n, sum(t) over w as t
-    from d window w as (partition by lang, hash order by seq))),
-changes as (
-  select lang, seq, sum(duplicated - previous_duplicated) as duplicated, sum(t - previous_t) as tokens
-  from (select *, coalesce(lag(duplicated) over w, 0) as previous_duplicated,
-               coalesce(lag(t) over w, 0) as previous_t
-        from structures window w as (partition by lang, hash order by seq))
-  group by lang, seq),
-running as (
-  select lang, seq, sum(duplicated) over w as duplicated, sum(tokens) over w as tokens
-  from changes window w as (partition by lang order by seq)),
-grid as (select c.seq, l.lang from commits c, (select distinct lang from running) l),
-totals as (
-  select g.seq, g.lang, r.duplicated, r.tokens
-  from grid g asof join running r on g.lang = r.lang and g.seq >= r.seq
-  where r.tokens > 0)
-select seq, sum(duplicated) / sum(tokens) as value,
-       map(list(lang order by lang), list(duplicated / tokens order by lang)) as by_language,
-       family_ratio(duplicated, tokens, lang, 'c') as c, family_ratio(duplicated, tokens, lang, 'rust') as rust,
-       family_ratio(duplicated, tokens, lang, 'python') as python, family_ratio(duplicated, tokens, lang, 'ecma') as ecma
-from totals group by seq;
-
-comment on view metrics.duplication is 'STRUCTURE: Duplicated code share
-
-What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.
-
-Read: 0.05 means 5% of it has a structural twin.
-
-Trend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.';
 
 create or replace view metrics.concentration as
 select seq, sum(large_tokens) / sum(fn_tokens) as value,
@@ -175,12 +141,12 @@ Trend: rising means logic piles up in a few large functions. Unvalidated.';
 
 create or replace view metrics.ownership as
 with changes_by_author as (
-  select w.win, x.path, c.author, count(*) as n
-  from windows w join change_weights x using (seq) join commits c using (seq)
+  select w.win, x.lineage, a.identity, count(*) as n
+  from windows w join change_weights x using (seq) join authors a using (seq)
   group by all),
 files as (
-  select win, path, max(n) / sum(n) as top_share
-  from changes_by_author group by win, path having sum(n) >= 2),
+  select win, lineage, max(n) / sum(n) as top_share
+  from changes_by_author group by win, lineage having sum(n) >= 2),
 spans as (select win, any_value(span_weeks) as span_weeks from windows group by win)
 select f.win as seq, avg(f.top_share) as value,
        low(f.top_share) as low, high(f.top_share) as high,
@@ -195,6 +161,74 @@ Read: 0.8 means a typical file''s main author made 80% of its changes. The shade
 
 Trend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.';
 
+create or replace view metrics.orphaning as
+select o.seq, coalesce(sum(tokens) filter (orphaned > orphaned_share()), 0) / nullif(sum(tokens), 0) as value,
+       sum(orphaned * tokens) / nullif(sum(tokens), 0) as mean_orphaned,
+       count(*) filter (orphaned > orphaned_share()) as orphaned_files, count(*) as files,
+       any_value(w.span_weeks) as span_weeks
+from units.orphaning o join (select win, any_value(span_weeks) as span_weeks from windows group by win) w on w.win = o.seq
+group by o.seq;
+
+comment on view metrics.orphaning is 'CHANGES: Code whose authors have left
+
+What: the share of production code in files where more than half of the past changes were made by authors with no commit in the last 12 months, each week. mean_orphaned is the token-weighted share of changes by such authors; orphaned_files counts the files. Lower is better.
+
+Read: 0.3 means three tenths of the code was mostly written by people no longer committing. Bulk commits are left out; renames keep a file''s history. Squash merges credit the merger.
+
+Trend: rising means knowledge of more code leaves with its authors: that code is changed by people who did not write it. Separate from ownership, which looks at who changes files now. Unvalidated.';
+
+create or replace view metrics.accretion as
+with per_file as (
+  select w.win, t.lineage, count(*) as touches, count(*) filter (t.raised) as raised,
+         any_value(w.span_weeks) as span_weeks
+  from windows w join units.touches t using (seq)
+  where t.seq in (select seq from change_weights)
+  group by all having count(*) >= accretion_touches())
+select win as seq, sum(raised) / sum(touches) as value, avg(raised / touches) as mean_file,
+       count(*) as files, sum(touches) as touches, any_value(span_weeks) as span_weeks
+from per_file group by win;
+
+comment on view metrics.accretion is 'CHANGES: Changes that grow existing functions
+
+What: of the changes to files changed at least 3 times in the last 100 code commits, the share that add decision points or nesting to a function that already existed, each week. New functions do not count. mean_file is the same share averaged over files. Lower is better.
+
+Read: 0.4 means two in five such changes made an existing function branchier or deeper rather than adding a new one.
+
+Trend: rising means logic accretes in place: functions grow with each change instead of being split. Unvalidated.';
+
+create or replace view metrics.function_decisions as
+select seq, p90 as value, max, share, functions from function_tail('decisions', many_decisions());
+
+comment on view metrics.function_decisions is 'COMPLEXITY: Decision points per function (90th percentile)
+
+What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per production function: the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 10 (share).
+
+Read: 6 means nine in ten functions have at most 6 decision points. A tail value, so adding simple code elsewhere does not lower it.
+
+Trend: rising means the branchiest functions get branchier. Unvalidated.';
+
+create or replace view metrics.function_nesting as
+select seq, p90 as value, max, share, functions from function_tail('nesting', deep_nesting());
+
+comment on view metrics.function_nesting is 'COMPLEXITY: Nesting depth per function (90th percentile)
+
+What: the deepest block below the function body, per production function: the 90th percentile over functions (value), the deepest function (max), and the share of function code in functions nested more than 3 deep (share).
+
+Read: 2 means nine in ten functions nest at most two blocks below their body. Else-if chains stay flat.
+
+Trend: rising means the most deeply nested functions get deeper. Unvalidated.';
+
+create or replace view metrics.function_params as
+select seq, p90 as value, max, share, functions from function_tail('params', many_params());
+
+comment on view metrics.function_params is 'COMPLEXITY: Parameters per function (90th percentile)
+
+What: parameters per production function (self included): the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 5 (share).
+
+Read: 4 means nine in ten functions take at most 4 parameters.
+
+Trend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.';
+
 create or replace view metrics.decisions as
 select seq, 100 * sum(decisions) / nullif(sum(tokens), 0) as value,
        map(list(lang order by lang), list(100 * decisions / nullif(tokens, 0) order by lang)) as by_language,
@@ -208,7 +242,7 @@ What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 
 
 Read: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.
 
-Trend: rising means more paths to understand and test per line. Unvalidated.';
+Trend: rising means more paths to understand and test per line. A density: adding plain code anywhere lowers it, and dividing by size does not remove size, so read function_decisions first. Unvalidated.';
 
 create or replace view metrics.nesting as
 select seq, sum(nested_tokens) / nullif(sum(fn_tokens), 0) as value,
@@ -224,37 +258,62 @@ What: how many blocks deep function code sits below the function body, weighted 
 
 Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.
 
-Trend: rising means more conditions to keep in mind while reading. Unvalidated.';
+Trend: rising means more conditions to keep in mind while reading. An average over all function code: read function_nesting first. Unvalidated.';
 
 create or replace view metrics.global_state as
-select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(global_state, tokens, lang, 'c') as c, 1000 * family_ratio(global_state, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(global_state, tokens, lang, 'python') as python, 1000 * family_ratio(global_state, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('global_state');
 
 comment on view metrics.global_state is 'NONLOCAL: Global mutable state per 1,000 tokens
 
-What: declarations of global mutable state per 1,000 production tokens, overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
+What: declarations of global mutable state per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
 
 Read: the forms differ: compare each language over time, not languages with each other.
 
-Trend: rising means behaviour depends on more state outside the code in view.';
+Trend: rising means behaviour depends on more state outside the code in view. Read the count beside the density: adding plain code lowers the density without removing any state.';
 
 create or replace view metrics.exceptions as
-select seq, 1000 * sum(throws) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(1000 * throws / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(throws, tokens, lang, 'c') as c, 1000 * family_ratio(throws, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(throws, tokens, lang, 'python') as python, 1000 * family_ratio(throws, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('throws');
 
 comment on view metrics.exceptions is 'NONLOCAL: Throws and panics per 1,000 tokens
 
-What: non-local exits per 1,000 production tokens, overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp.
+What: non-local exits per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp. invariants, unhandled and unfinished split them by intent.
 
 Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.
 
-Trend: rising means control leaves functions in more places a caller cannot see. Unvalidated.';
+Trend: rising means control leaves functions in more places a caller cannot see. Read the count beside the density. Unvalidated.';
+
+create or replace view metrics.invariants as
+select * from per_kilotoken('invariants');
+
+comment on view metrics.invariants is 'NONLOCAL: Stated invariants per 1,000 tokens
+
+What: assertions that state what must hold, per 1,000 production tokens (value), and their number (count), overall and per language (c, rust, python): Rust assert!, assert_eq!, assert_ne!, their debug_ forms and unreachable!; Python assert; C/C++ assert().
+
+Read: an invariant written down is checked where it is assumed. More is not worse: these panics are intended. Compare each language over time.
+
+Trend: falling while the code grows means fewer assumptions are stated. Unvalidated.';
+
+create or replace view metrics.unhandled as
+select * from per_kilotoken('unhandled');
+
+comment on view metrics.unhandled is 'NONLOCAL: Fallible operations left unhandled per 1,000 tokens
+
+What: Rust unwrap and expect calls per 1,000 production tokens (value), and their number (count).
+
+Read: each one panics instead of handling a failure. Syntax cannot tell an unwrap that cannot fail (a fixed regex, a lock) from one that can, so this counts both.
+
+Trend: rising means more failures turned into panics instead of handled. Unvalidated.';
+
+create or replace view metrics.unfinished as
+select * from per_kilotoken('unfinished');
+
+comment on view metrics.unfinished is 'NONLOCAL: Unfinished code per 1,000 tokens
+
+What: markers of code left unfinished per 1,000 production tokens (value), and their number (count), overall and per language (rust, python): Rust todo! and unimplemented!, Python raise NotImplementedError.
+
+Read: each panics when reached. Python''s NotImplementedError also marks abstract methods, which are finished.
+
+Trend: rising means more paths left for later. Unvalidated.';
 
 create or replace view metrics.goto as
 select seq, 1000 * sum(gotos) / nullif(sum(tokens), 0) as value,
@@ -351,3 +410,18 @@ What: the share of each language''s imports of this repository''s own code that 
 Read: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.
 
 Trend: a drop means the dependency metrics became less complete, not that the code changed.';
+
+create or replace view metrics.modularity_violations as
+select p.seq, avg((not p.imported)::int) as value, count(*) filter (not p.imported) as violations,
+       count(*) as pairs, any_value(c.value) as import_coverage
+from units.coupled_pairs p left join metrics.import_coverage c using (seq)
+group by p.seq;
+
+comment on view metrics.modularity_violations is 'DEPENDENCIES: Files changed together without importing each other
+
+What: of the pairs of production files (one language) changed together by at least 3 commits in the last 100 code commits, the share where neither imports the other (value) and their number (violations), each week. import_coverage is beside it: imports codevitals cannot follow make pairs look unrelated and inflate this. Lower is better.
+
+Read: 0.6 means three in five tightly coupled pairs share no visible dependency: the coupling is hidden (a shared format, a protocol, copy-paste).
+
+Trend: rising means more change coupling the code structure does not show. Read it with import_coverage: a drop there raises this. Unvalidated.';
+

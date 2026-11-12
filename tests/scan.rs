@@ -35,7 +35,7 @@ fn fixture_tables() {
     let commits: Vec<String> = (0..4)
         .map(|i| {
             let message = ["c0", "c1", "c2", "merge"][i];
-            format!("({i},{},{} 00:00:00,t <t@t>,{message}\n)", ids[i], times[i])
+            format!("({i},{},{} 00:00:00,t,t@t,{message}\n)", ids[i], times[i])
         })
         .collect();
     assert_eq!(
@@ -52,11 +52,25 @@ fn fixture_tables() {
     let (plus, d) = (blob("main~2:src/b.rs"), blob("main:d.rs"));
     assert_rows(
         dir,
-        "select seq, path, blob from changes order by seq, path",
+        "select seq, path, blob, source from changes order by seq, path",
         format!(
-            "(0,README.md,{readme}) (0,a.rs,{a1}) (1,a.rs,{a2}) (1,src/b.rs,{plus}) \
-             (2,README.md,NULL) (2,src/b.rs,NULL) (2,src/c.rs,{plus}) (3,d.rs,{d})"
+            "(0,README.md,{readme},NULL) (0,a.rs,{a1},NULL) (1,a.rs,{a2},NULL) (1,src/b.rs,{plus},NULL) \
+             (2,README.md,NULL,NULL) (2,src/b.rs,NULL,NULL) (2,src/c.rs,{plus},src/b.rs) (3,d.rs,{d},NULL)"
         ),
+    );
+    // Lines added and deleted: none counted for README.md (not code) or for the
+    // deletion the rename implies; the rename itself edits no line.
+    assert_rows(
+        dir,
+        "select seq, path, added, deleted from changes order by seq, path",
+        "(0,README.md,NULL,NULL) (0,a.rs,3,0) (1,a.rs,1,0) (1,src/b.rs,3,0) \
+         (2,README.md,NULL,NULL) (2,src/b.rs,NULL,NULL) (2,src/c.rs,0,0) (3,d.rs,1,0)",
+    );
+    // src/c.rs continues the lineage of src/b.rs, which it was renamed from.
+    assert_rows(
+        dir,
+        "select distinct path, lineage from lineages order by path",
+        "(README.md,0:README.md) (a.rs,0:a.rs) (d.rs,3:d.rs) (src/b.rs,1:src/b.rs) (src/c.rs,1:src/b.rs)",
     );
     assert_rows(
         dir,
@@ -69,7 +83,7 @@ fn fixture_tables() {
     assert_rows(
         dir,
         "select kind, count(*), count(distinct blob) from spans group by kind order by kind",
-        "(block,4,4) (file,4,4) (fn,4,4)",
+        "(block,4,4) (file,4,4) (fn,4,4) (vocabulary,4,4)",
     );
     assert_rows(
         dir,
@@ -78,6 +92,86 @@ fn fixture_tables() {
                  where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
         ),
         format!("({a1},add,18,0) ({a2},add,18,2)"),
+    );
+}
+
+/// Authors are told apart after the scanned revision's .mailmap, as git applies it,
+/// including to commits stored by an earlier scan.
+#[test]
+fn mailmap_merges_authors() {
+    let mut r = common::Repo::new();
+    r.write("a.rs", "fn a() {}\n");
+    r.author("Ann", "ann@old.org")
+        .commit("main", "c0\n", 0, &[]);
+    r.write("a.rs", "fn a() { }\n");
+    r.author("ann", "ANN@work.com").extend("c1\n", 1);
+    r.write("a.rs", "fn a() {  }\n");
+    r.author("build", "ci@x.org").extend("c2\n", 2);
+    r.write("a.rs", "fn a() {   }\n");
+    r.author("dependabot[bot]", "bot@x.org").extend("c3\n", 3);
+    scan(&r.dir, "main");
+    let authors = "select seq, name, email, identity, is_bot from authors order by seq";
+    assert_rows(
+        &r.dir,
+        authors,
+        "(0,Ann,ann@old.org,ann@old.org,false) (1,ann,ANN@work.com,ann@work.com,false) \
+         (2,build,ci@x.org,ci@x.org,false) (3,dependabot[bot],bot@x.org,bot@x.org,true)",
+    );
+    r.write(
+        ".mailmap",
+        "# comment\nAnn Smith <ann@work.com> <ann@old.org>\n<ann@work.com> <Ann@Work.com>\n\
+         Ann Smith <ann@work.com> ann <ann@work.com>\nRobot <ci@x.org> Someone Else <ci@x.org>\n",
+    );
+    r.author("Ann", "ann@old.org").extend("mailmap\n", 4);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        authors,
+        "(0,Ann Smith,ann@work.com,ann@work.com,false) (1,Ann Smith,ann@work.com,ann@work.com,false) \
+         (2,build,ci@x.org,ci@x.org,false) (3,dependabot[bot],bot@x.org,bot@x.org,true) \
+         (4,Ann Smith,ann@work.com,ann@work.com,false)",
+    );
+}
+
+/// Renames, also with edits, continue a file's lineage through any number of moves;
+/// a path deleted and added again starts a new one; an unrelated file added where
+/// another was deleted is no rename.
+#[test]
+fn renames_continue_lineages() {
+    let body = |n: usize| {
+        (0..n)
+            .map(|i| format!("fn f{i}(x: i32) -> i32 {{ x + {i} }}\n"))
+            .collect::<String>()
+    };
+    let mut r = common::Repo::new();
+    r.write("a.rs", body(10)).write("z.rs", body(3));
+    r.commit("main", "c0\n", 0, &[]);
+    r.remove("a.rs").write("src/a.rs", body(10));
+    r.extend("move\n", 1);
+    r.remove("src/a.rs").write("lib/b.rs", body(11)); // renamed and edited
+    r.extend("move and edit\n", 2);
+    r.remove("z.rs");
+    r.extend("delete\n", 3);
+    r.write("z.rs", "struct Unrelated;\n");
+    r.extend("re-add\n", 4);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        "select seq, path, source, lineage from lineages order by seq, path",
+        "(0,a.rs,NULL,0:a.rs) (0,z.rs,NULL,0:z.rs) (1,a.rs,NULL,0:a.rs) (1,src/a.rs,a.rs,0:a.rs) \
+         (2,lib/b.rs,src/a.rs,0:a.rs) (2,src/a.rs,NULL,0:a.rs) (3,z.rs,NULL,0:z.rs) (4,z.rs,NULL,4:z.rs)",
+    );
+    // Lines change against the source for a rename; a deletion deletes every line.
+    assert_rows(
+        &r.dir,
+        "select seq, path, added, deleted from changes where seq >= 2 order by seq, path",
+        "(2,lib/b.rs,1,0) (2,src/a.rs,NULL,NULL) (3,z.rs,0,3) (4,z.rs,1,0)",
+    );
+    // The deletions a rename implies are no changes of their own.
+    assert_rows(
+        &r.dir,
+        "select seq, path from code_changes order by seq, path",
+        "(0,a.rs) (0,z.rs) (1,src/a.rs) (2,lib/b.rs) (3,z.rs) (4,z.rs)",
     );
 }
 
@@ -140,7 +234,8 @@ fn history_errors_say_what_to_do() {
 
 /// Content that is not source code gets a `file` row with NULL counts: blobs over
 /// 1 MiB, binary files, Git LFS pointers and minified code. An empty file is parsed in
-/// the language of its first path with a known extension.
+/// the language of its first path with a known extension. Files that only ever sit
+/// at test, vendored, generated or documentation paths are not parsed at all.
 #[test]
 fn only_source_code_is_parsed() {
     let mut r = fixture();
@@ -161,7 +256,9 @@ fn only_source_code_is_parsed() {
             "lfs.rs",
             "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n",
         )
-        .write("app.min.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+        .write("app.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+        .write("tests/t.rs", "fn t() {}\n")
+        .write("vendor/v.c", "int v;\n")
         .write(".empty.txt", "")
         .write("pkg/__init__.py", "");
     r.extend("content\n", 5);
@@ -170,7 +267,7 @@ fn only_source_code_is_parsed() {
         &r.dir,
             "select c.path, s.lang, s.tokens from changes c join spans s on s.blob = c.blob and s.kind = 'file'
              where c.seq = 4 order by c.path",
-        "(.empty.txt,python,0) (app.min.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)",
+        "(.empty.txt,python,0) (app.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)",
     );
 }
 
@@ -260,7 +357,7 @@ fn roles_follow_attributes_then_conventions() {
 }
 
 /// Squashing history keeps the state metrics of the final tree: the same tree in one
-/// commit has the same size, encapsulation, duplication and concentration.
+/// commit has the same size, encapsulation and concentration.
 #[test]
 fn squashing_keeps_state_metrics_of_the_final_tree() {
     let full = fixture();
@@ -271,7 +368,6 @@ fn squashing_keeps_state_metrics_of_the_final_tree() {
     for m in [
         "metrics.size",
         "metrics.encapsulation",
-        "metrics.duplication",
         "metrics.concentration",
     ] {
         let latest = format!("select * exclude (seq) from {m} order by seq desc limit 1");

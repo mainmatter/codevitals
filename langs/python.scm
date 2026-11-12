@@ -7,3 +7,6 @@
 (block) @block
 [(global_statement) (nonlocal_statement)] @global_state
 (raise_statement) @throw
+(class_definition name: (identifier) @name) @scope
+(assert_statement) @invariant
+(raise_statement [(identifier) @_e (call function: (identifier) @_e)] (#eq? @_e "NotImplementedError")) @unfinished

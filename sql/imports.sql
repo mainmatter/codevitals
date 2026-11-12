@@ -54,8 +54,7 @@ left join spans b on b.blob = c.blob and b.kind = 'base_url';
 
 create or replace view import_keys as
 select distinct v.path, i.name, i.scope
-from versions v join path_roles r on r.path = v.path and r.role = 'code'
-join blob_imports i using (blob);
+from code_versions v join blob_imports i using (blob);
 
 -- Imports an alias matches, and the path it makes of them.
 create or replace view es_alias_imports as

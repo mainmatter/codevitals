@@ -14,3 +14,5 @@
 (call_expression function: (identifier) @_f (#match? @_f "^(longjmp|siglongjmp)$")) @throw
 [(for_range_loop) (catch_clause)] @branch
 (throw_statement) @throw
+[(class_specifier name: (_) @name body: (_)) (struct_specifier name: (_) @name body: (_)) (namespace_definition name: (_) @name)] @scope
+(call_expression function: (identifier) @_a (#eq? @_a "assert")) @invariant

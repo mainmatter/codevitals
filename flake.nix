@@ -129,6 +129,9 @@
             pkgs.duckdb
             pkgs.python3 # grafana/generate.py
             cv-grafana
+            # Workflow linting, as CI's lint-actions job runs it (from the same nixpkgs).
+            pkgs.actionlint
+            pkgs.zizmor
           ];
         in
         {

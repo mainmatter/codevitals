@@ -38,9 +38,12 @@ fn catalog(db: &Connection) -> Result<Vec<(String, String)>> {
         .collect())
 }
 
-/// Every metric's name, in definition order.
-pub fn list(db: &Connection) -> Result<Vec<String>> {
-    Ok(catalog(db)?.into_iter().map(|(name, _)| name).collect())
+/// Every view's name in `schema` (`metrics` or `experimental`), in definition order.
+pub fn list(db: &Connection, schema: &str) -> Result<Vec<String>> {
+    Ok(views(db, schema)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect())
 }
 
 /// Metric names for clap, so `--help` lists every metric with its title: the first
@@ -71,21 +74,75 @@ pub fn names() -> PossibleValuesParser {
     }))
 }
 
-/// Materializes every helper view, in definition order, as a temp table of the same
-/// name. The temp table shadows the view for this connection only, so metrics that
-/// share a helper compute it once. `cones` derive from `import_edges`, so they are
-/// rebuilt as soon as it is cached, before the helpers that read them.
-fn cache_helpers(db: &mut Connection) -> Result<()> {
+/// Whether `text` names `name` as a whole identifier.
+fn mentions(text: &str, name: &str) -> bool {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices(name)
+        .any(|(i, _)| !text[..i].ends_with(ident) && !text[i + name.len()..].starts_with(ident))
+}
+
+/// Materializes the helper views (schema `main`) that the views `roots` (qualified,
+/// e.g. `metrics.size`, or a helper's bare name) read, directly or through other
+/// views and macros, in definition order, each as a temp table of the same name. The
+/// temp table shadows the view for this connection only, so the views that share a
+/// helper compute it once. `cones` derive from `import_edges`, so they are rebuilt
+/// as soon as it is cached, before the helpers that read them.
+pub fn cache_helpers(db: &mut Connection, roots: &[String]) -> Result<()> {
     let started = Instant::now();
-    let helpers = views(db, "main")?;
-    for (view, _) in &helpers {
+    let all = views(db, "main")?;
+    let definitions: Vec<(String, String)> = db
+        .prepare(
+            "select if(schema_name = 'main', '', schema_name || '.') || view_name, sql
+             from duckdb_views() where not internal
+             union all
+             select function_name, macro_definition from duckdb_functions()
+             where function_type in ('macro', 'table_macro') and not internal",
+        )?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    // Everything the roots read, transitively: grow the text until no new name shows.
+    let mut used: Vec<bool> = definitions.iter().map(|(n, _)| roots.contains(n)).collect();
+    let mut text: String = roots.iter().map(|r| format!(" {r} ")).collect();
+    for (i, (_, sql)) in definitions.iter().enumerate() {
+        if used[i] {
+            text.push_str(sql);
+        }
+    }
+    loop {
+        let found: Vec<usize> = (0..definitions.len())
+            .filter(|&i| !used[i] && mentions(&text, &definitions[i].0))
+            .collect();
+        if found.is_empty() {
+            break;
+        }
+        for i in found {
+            used[i] = true;
+            text.push_str(&definitions[i].1);
+        }
+    }
+    let helpers: Vec<&String> = all
+        .iter()
+        .map(|(view, _)| view)
+        .filter(|view| {
+            definitions
+                .iter()
+                .zip(&used)
+                .any(|((n, _), u)| *u && n == *view)
+        })
+        .collect();
+    for view in &helpers {
         let caching = Instant::now();
         db.execute_batch(&format!(
             "create temp table \"{view}\" as select * from main.\"{view}\""
         ))
         .with_context(|| format!("compute {view}"))?;
         debug!(%view, elapsed = ?caching.elapsed(), "cached");
-        if view == "import_edges" {
+        if *view == "import_edges" {
             crate::graph::derive(db, crate::graph::Cones::Temp)?;
         }
     }
@@ -93,9 +150,11 @@ fn cache_helpers(db: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// One JSON object mapping each metric in `names` to its rows, each with the commit `time` (ISO 8601 UTC) after `seq`.
-pub fn export(db: &mut Connection, names: &[String]) -> Result<String> {
-    cache_helpers(db)?;
+/// One JSON object mapping each view of `schema` in `names` to its rows, each with the
+/// commit `time` (ISO 8601 UTC) after `seq`.
+pub fn export(db: &mut Connection, schema: &str, names: &[String]) -> Result<String> {
+    let roots: Vec<String> = names.iter().map(|m| format!("{schema}.{m}")).collect();
+    cache_helpers(db, &roots)?;
     let (code_commits, windows, size, weeks): (i64, i64, i64, i64) = db.query_row(
         "select (select count(*) from code_commits), (select count(distinct win) from windows),
                 window_commits(), window_max_weeks()",
@@ -118,11 +177,13 @@ pub fn export(db: &mut Connection, names: &[String]) -> Result<String> {
         let started = Instant::now();
         let rows = format!(
             "select m.seq, strftime(c.time, '%Y-%m-%dT%H:%M:%SZ') as time, m.* exclude (seq)
-             from metrics.{m} m join commit_times c using (seq) order by m.seq"
+             from {schema}.{m} m join commit_times c using (seq) order by m.seq"
         );
         let (count, json): (usize, String) = db
             .query_row(
-                &format!("select count(*), coalesce(json_group_array(t), '[]') from ({rows}) t"),
+                &format!(
+                    "select count(*), coalesce(to_json(list(t order by t.seq)), '[]') from ({rows}) t"
+                ),
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )

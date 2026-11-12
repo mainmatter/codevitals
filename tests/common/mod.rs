@@ -2,8 +2,9 @@
 //! building git repositories in process, and writing facts directly.
 #![allow(dead_code)] // each test file uses a different subset
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use gix::ObjectId;
 use gix::objs::tree::EntryKind;
@@ -15,9 +16,38 @@ pub fn cv(dir: &TempDir, args: &[&str]) -> Output {
     cmd.env("RUST_LOG", "off"); // stderr carries only the summary line
     cmd.args(args).arg("--db").arg(db(dir));
     if args[0] == "scan" {
+        from_template(dir);
         cmd.arg(dir.path().join("repo"));
     }
     cmd.output().unwrap()
+}
+
+/// An empty database with codevitals' SQL applied, made once and shared by every
+/// test: applying the SQL to a new database takes about a second, and nearly every
+/// test needs one.
+fn template() -> &'static Path {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let hash = codevitals::sql_hash();
+        let path = std::env::temp_dir().join(format!("codevitals-test-{hash}.duckdb"));
+        if !path.exists() {
+            // Written beside, then renamed: concurrent test runs never see half a file.
+            let partial = path.with_extension(format!("{}.partial", std::process::id()));
+            let conn = duckdb::Connection::open(&partial).unwrap();
+            conn.execute_batch(codevitals::SQL).unwrap();
+            conn.execute_batch(&codevitals::sql_mark()).unwrap();
+            drop(conn);
+            std::fs::rename(&partial, &path).unwrap();
+        }
+        path
+    })
+}
+
+/// Gives `dir` the template database, unless it has a database already.
+pub fn from_template(dir: &TempDir) {
+    if !db(dir).exists() {
+        std::fs::copy(template(), db(dir)).unwrap();
+    }
 }
 
 /// Runs codevitals, which must succeed, and returns its stdout.
@@ -90,11 +120,12 @@ pub fn rev(dir: &TempDir, spec: &str) -> String {
 }
 
 /// A git repository in `dir/repo`, written in process. Files accumulate in a working
-/// tree that each commit snapshots; author and committer are `t <t@t>`.
+/// tree that each commit snapshots; author and committer are `t <t@t>` unless set.
 pub struct Repo {
     pub dir: TempDir,
     repo: gix::Repository,
     tree: ObjectId,
+    author: (String, String),
 }
 
 impl Repo {
@@ -102,7 +133,18 @@ impl Repo {
         let dir = TempDir::new().unwrap();
         let repo = gix::init(dir.path().join("repo")).unwrap();
         let tree = repo.empty_tree().id;
-        Repo { dir, repo, tree }
+        Repo {
+            dir,
+            repo,
+            tree,
+            author: ("t".into(), "t@t".into()),
+        }
+    }
+
+    /// Sets the author (and committer) of the commits that follow.
+    pub fn author(&mut self, name: &str, email: &str) -> &mut Repo {
+        self.author = (name.into(), email.into());
+        self
     }
 
     /// Writes `content` at `path`, which may be any bytes (git paths need not be UTF-8).
@@ -132,8 +174,8 @@ impl Repo {
     ) -> ObjectId {
         let time = format!("{} +0000", 1_767_225_600 + day * 86_400);
         let who = gix::actor::SignatureRef {
-            name: "t".into(),
-            email: "t@t".into(),
+            name: self.author.0.as_str().into(),
+            email: self.author.1.as_str().into(),
             time: &time,
         };
         let reference = format!("refs/heads/{branch}");
@@ -215,7 +257,7 @@ pub fn fixture_named(add: &str, plus: &str, d: &str) -> Repo {
 /// tests that write facts directly with `history`.
 pub fn facts(history: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
-    execute(&dir, codevitals::SQL);
+    from_template(&dir);
     execute(&dir, history);
     dir
 }
@@ -233,7 +275,7 @@ pub fn random_history(
 ) -> String {
     let last = first + commits;
     format!(
-        "insert into commits select seq, 'c' || seq, timestamp '2026-01-01' + to_days(seq::int), 't <t@t>', 'edit'
+        "insert into commits select seq, 'c' || seq, timestamp '2026-01-01' + to_days(seq::int), 't', 't@t', 'edit'
            from range({first}, {last}) r(seq);
          insert into changes (seq, path, blob) select seq, 'm' || (f % {modules}) || '/f' || f || '.rs', 'b' || seq || '-' || f
            from range({first}, {last}) c(seq), range({files}) g(f)

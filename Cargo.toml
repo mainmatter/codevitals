@@ -14,8 +14,10 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "string"] }
-duckdb = { version = "1.20000.1", features = ["bundled", "json"] }
+crossterm = "0.29.0"
+duckdb = { version = "1.20000.1", features = ["appender-arrow", "bundled", "json"] }
 gix = "0.90.0"
+jiff = "0.2.42"
 petgraph = { version = "0.8.3", default-features = false }
 rayon = "1.12.0"
 tracing = "0.1.44"
@@ -29,6 +31,7 @@ tree-sitter-python = "=0.25.0"
 tree-sitter-rust = "=0.24.2"
 tree-sitter-toml-ng = "=0.7.0"
 tree-sitter-typescript = "=0.23.2"
+unicode-width = "0.2.3"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]
@@ -40,3 +43,32 @@ tempfile = "3.27.0"
 [profile.dev.package.libduckdb-sys]
 opt-level = 3
 debug = false
+
+# Parsers are C, compiled at the package's opt-level: unoptimized, a test's first
+# parse and query compilation take most of a second.
+[profile.dev.package.tree-sitter]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-c]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-cpp]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-javascript]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-json]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-python]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-rust]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-toml-ng]
+opt-level = 3
+
+[profile.dev.package.tree-sitter-typescript]
+opt-level = 3

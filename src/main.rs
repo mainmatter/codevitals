@@ -16,9 +16,16 @@ use crate::db::open;
 
 mod attributes;
 mod db;
+mod diff;
 mod graph;
+mod label;
+mod labels;
 mod metrics;
 mod parse;
+mod thrash;
+mod units;
+mod util;
+mod validate;
 mod walk;
 
 /// Record facts about a git repository's history into a DuckDB file.
@@ -40,15 +47,93 @@ enum Cli {
     },
     /// Compute metrics into one JSON object: each metric's name maps to an array
     /// of row objects.
-    Metrics {
+    Metrics(Export),
+    /// Compute the experimental metrics (schema `experimental`): candidates without
+    /// supporting evidence yet, kept out of `metrics` and the dashboard. One JSON
+    /// object, as `metrics` writes.
+    Experimental(Export),
+    /// Report how each metric changes from BASE to HEAD, and the functions and files
+    /// that account for the change, largest contribution first. Needs no scan: blobs
+    /// the database lacks are parsed (with a scan that reached BASE, only those that
+    /// differ). Windowed metrics (changes, entropy, ownership) and dependency metrics
+    /// need history and are not reported.
+    Diff {
+        base: String,
+        head: String,
+        /// Repository to read the commits from.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Scanned database to take parsed blobs from, if it exists.
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Contributions listed per metric, for functions and for files.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        #[arg(long, value_enum, default_value_t = util::Format::Json)]
+        format: util::Format,
+    },
+    /// Rank the production files of the newest scanned commit by how often they
+    /// changed recently times their decision points: where change meets complexity.
+    Hotspots {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Files to list.
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        #[arg(long, value_enum, default_value_t = util::Format::Text)]
+        format: util::Format,
+    },
+    /// Judge pairs of functions side by side: which would you rather have to change?
+    /// Left, right, or can't tell; q quits, and the next session resumes. Judgments
+    /// are appended to the labels file; your git user.email names you as rater.
+    #[command(hide = true)] // for developing codevitals' metrics, not for users
+    Label {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Repository the functions are read from; the one scanned when omitted.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Labels file (JSON Lines) to append to.
+        #[arg(long, default_value = "codevitals-labels.jsonl")]
+        labels: PathBuf,
+    },
+    /// Check per-function metrics against the labels of `cv label`: how often the
+    /// function with the higher value is the one raters would rather not change,
+    /// against token count as baseline, with raters' self-agreement and agreement.
+    #[command(hide = true)] // for developing codevitals' metrics, not for users
+    Validate {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Labels file (JSON Lines) of `cv label`.
+        #[arg(long, default_value = "codevitals-labels.jsonl")]
+        labels: PathBuf,
+        #[arg(long, value_enum, default_value_t = util::Format::Text)]
+        format: util::Format,
+    },
+    /// Export the production files and functions at one scanned commit, with the
+    /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
+    /// A function keeps its `function` id across versions while its file and name do.
+    Units {
         #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
         /// File to write, replaced atomically; `-` writes to stdout.
         output: PathBuf,
-        /// Metrics to compute; all of them when omitted.
-        #[arg(value_name = "METRIC")]
-        names: Vec<String>,
+        /// Scanned commit (id or prefix); the newest when omitted.
+        #[arg(long)]
+        rev: Option<String>,
     },
+}
+
+/// Where `metrics` and `experimental` read and write, and which views they compute.
+#[derive(clap::Args)]
+struct Export {
+    #[arg(long, default_value = "codevitals.duckdb")]
+    db: PathBuf,
+    /// File to write, replaced atomically; `-` writes to stdout.
+    output: PathBuf,
+    /// Metrics to compute; all of them when omitted.
+    #[arg(value_name = "METRIC")]
+    names: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -68,32 +153,21 @@ fn main() -> Result<()> {
             db: path,
             rev,
         } => {
-            let repo = gix::discover(&repo)
-                .with_context(|| format!("open the git repository containing {repo:?}"))?;
-            let mut db = open(&path, AccessMode::ReadWrite)?;
+            let repo = open_repo(&repo)?;
+            let (mut db, views) = db::open_for_scan(&path)?;
             let (commits, changes) = walk::walk(&mut db, &path, &repo, &rev)?;
             let blobs = parse::parse(&mut db, &repo)?;
             graph::derive(&mut db, graph::Cones::Stored)?;
+            views.map(db::Views::finish).transpose()?;
             eprintln!("scanned {commits} commits, {changes} changes; parsed {blobs} blobs");
         }
-        Cli::Metrics {
+        Cli::Metrics(Export {
             db: path,
             output,
             names,
-        } => {
-            ensure!(
-                path.exists(),
-                "no database at {path:?}; create it with `cv scan --db {}`",
-                path.display()
-            );
-            let mut db = open(&path, AccessMode::ReadOnly)?;
-            let commits: i64 = db.query_row("select count(*) from commits", [], |r| r.get(0))?;
-            ensure!(
-                commits > 0,
-                "{path:?} has no commits yet; run `cv scan --db {}` first",
-                path.display()
-            );
-            let metrics = metrics::list(&db)?;
+        }) => {
+            let mut db = open_scanned(&path)?;
+            let metrics = metrics::list(&db, "metrics")?;
             ensure!(
                 !metrics.iter().any(|m| output.as_os_str() == m.as_str()),
                 "{output:?} is a metric; give the output file first, e.g. `cv metrics - {}`",
@@ -112,20 +186,122 @@ fn main() -> Result<()> {
                         .collect()
                 }
             };
-            let json = metrics::export(&mut db, &names)?;
-            if output.as_os_str() == "-" {
-                println!("{json}");
-            } else {
-                // Write beside the target, then rename: readers never see a partial file.
-                let partial = output.with_extension("partial");
-                std::fs::write(&partial, json + "\n")
-                    .with_context(|| format!("write {partial:?}"))?;
-                std::fs::rename(&partial, &output)
-                    .with_context(|| format!("replace {output:?}"))?;
-                info!(?output, "metrics written");
+            let json = metrics::export(&mut db, "metrics", &names)?;
+            write(&output, json)?;
+            info!(?output, "metrics written");
+        }
+        Cli::Experimental(Export {
+            db: path,
+            output,
+            names,
+        }) => {
+            let mut db = open_scanned(&path)?;
+            let all = metrics::list(&db, "experimental")?;
+            if let Some(unknown) = names.iter().find(|n| !all.contains(n)) {
+                anyhow::bail!(
+                    "{unknown:?} is no experimental metric; they are: {}",
+                    all.join(", ")
+                );
             }
+            let names = if names.is_empty() { all } else { names };
+            let json = metrics::export(&mut db, "experimental", &names)?;
+            write(&output, json)?;
+        }
+        Cli::Diff {
+            base,
+            head,
+            repo,
+            db,
+            top,
+            format,
+        } => {
+            let repo = open_repo(&repo)?;
+            emit(format, diff::diff(&repo, &db, &base, &head, top, format)?);
+        }
+        Cli::Hotspots {
+            db: path,
+            top,
+            format,
+        } => {
+            let mut db = open_scanned(&path)?;
+            emit(format, units::hotspots(&mut db, top, format)?);
+        }
+        Cli::Label {
+            db: path,
+            repo,
+            labels,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let repo = db::scanned_repo(&db, repo.as_deref())?;
+            let made = label::run(&repo, &mut db, &labels)?;
+            eprintln!("{made} judgments added to {}", labels.display());
+        }
+        Cli::Validate {
+            db: path,
+            labels,
+            format,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let report = validate::validate(&mut db, &labels)?;
+            let out = match format {
+                util::Format::Json => report.json(),
+                util::Format::Text => report.text(),
+            };
+            emit(format, out);
+        }
+        Cli::Units {
+            db: path,
+            output,
+            rev,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let json = units::export(&mut db, rev.as_deref())?;
+            write(&output, json)?;
         }
     }
+    Ok(())
+}
+
+/// Prints a report: JSON on one line, text as it is (its lines end in newlines).
+fn emit(format: util::Format, out: String) {
+    match format {
+        util::Format::Json => println!("{out}"),
+        util::Format::Text => print!("{out}"),
+    }
+}
+
+/// The git repository containing `path`.
+fn open_repo(path: &std::path::Path) -> Result<gix::Repository> {
+    gix::discover(path).with_context(|| format!("open the git repository containing {path:?}"))
+}
+
+/// Opens an existing database with at least one scanned commit, read-only.
+fn open_scanned(path: &std::path::Path) -> Result<duckdb::Connection> {
+    ensure!(
+        path.exists(),
+        "no database at {path:?}; create it with `cv scan --db {}`",
+        path.display()
+    );
+    let db = open(path, AccessMode::ReadOnly)?;
+    let commits: i64 = db.query_row("select count(*) from commits", [], |r| r.get(0))?;
+    ensure!(
+        commits > 0,
+        "{path:?} has no commits yet; run `cv scan --db {}` first",
+        path.display()
+    );
+    Ok(db)
+}
+
+/// Writes `text` and a newline to `output`, atomically, or to stdout for `-`.
+fn write(output: &std::path::Path, text: String) -> Result<()> {
+    if output.as_os_str() == "-" {
+        println!("{text}");
+        return Ok(());
+    }
+    // Write beside the target, then rename: readers never see a partial file.
+    let partial = output.with_extension("partial");
+    std::fs::write(&partial, text + "\n").with_context(|| format!("write {partial:?}"))?;
+    std::fs::rename(&partial, output).with_context(|| format!("replace {output:?}"))?;
     Ok(())
 }
 
