@@ -68,6 +68,29 @@ pub fn oid(hex: &str) -> ObjectId {
 /// from existing databases too. `metrics` opens read-only and reopens for writing
 /// only to rebuild them.
 pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
+    let (db, views) = open_with(path, access, false)?;
+    assert!(views.is_none(), "nothing is deferred");
+    Ok(db)
+}
+
+/// `open` for writing, for `scan`: views the scan does not read (`VIEWS_SQL`), when
+/// they need rebuilding, are rebuilt on another connection in the background (most of
+/// a second of binding), to be waited for with `Views::finish` before exiting.
+pub fn open_for_scan(path: &Path) -> Result<(Connection, Option<Views>)> {
+    open_with(path, AccessMode::ReadWrite, true)
+}
+
+/// Views being rebuilt in the background.
+pub struct Views(std::thread::JoinHandle<Result<()>>);
+
+impl Views {
+    /// Waits until the views are rebuilt and marked current.
+    pub fn finish(self) -> Result<()> {
+        self.0.join().expect("rebuilding views does not panic")
+    }
+}
+
+fn open_with(path: &Path, access: AccessMode, defer: bool) -> Result<(Connection, Option<Views>)> {
     let connect = |access| -> Result<Connection> {
         let config = duckdb::Config::default().access_mode(access)?;
         let db = Connection::open_with_flags(path, config).with_context(|| {
@@ -94,7 +117,7 @@ pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
         .map(|()| db.query_row("select codevitals_sql()", [], |r| r.get(0)))
         .transpose()?;
     if applied.as_deref() == Some(hash.as_str()) {
-        return Ok(db);
+        return Ok((db, None));
     }
     if access == AccessMode::ReadOnly {
         drop(db);
@@ -112,10 +135,23 @@ pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     db.execute_batch(&stale.join(";\n"))?;
-    db.execute_batch(codevitals::SQL)
+    db.execute_batch(codevitals::SCAN_SQL)
         .context("apply codevitals' SQL")?;
-    db.execute_batch(&format!("create macro codevitals_sql() as '{hash}'"))?;
-    Ok(db)
+    // The hash marks the views current only once all are applied: an interrupted
+    // rebuild is redone.
+    let rest = move |db: &Connection| -> Result<()> {
+        db.execute_batch(codevitals::VIEWS_SQL)
+            .context("apply codevitals' SQL")?;
+        db.execute_batch(&format!("create macro codevitals_sql() as '{hash}'"))?;
+        Ok(())
+    };
+    if !defer {
+        rest(&db)?;
+        return Ok((db, None));
+    }
+    let background = db.try_clone()?;
+    let views = Views(std::thread::spawn(move || rest(&background)));
+    Ok((db, Some(views)))
 }
 
 /// Refuses a database whose layout or spans come from another codevitals version: an

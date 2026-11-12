@@ -26,8 +26,39 @@ pub const SQL: &str = concat!(
     include_str!("../sql/experimental.sql"),
 );
 
+/// The part of `SQL` a scan reads: the tables, helper views and the import graph.
+pub const SCAN_SQL: &str = concat!(
+    include_str!("../sql/schema.sql"),
+    "\n",
+    include_str!("../sql/helpers.sql"),
+    "\n",
+    include_str!("../sql/imports.sql"),
+    "\n",
+);
+
+/// The rest of `SQL`: the per-unit and metric views, which only read the scan's
+/// results. `SQL` is `SCAN_SQL` followed by `VIEWS_SQL`.
+pub const VIEWS_SQL: &str = concat!(
+    include_str!("../sql/units.sql"),
+    "\n",
+    include_str!("../sql/metrics.sql"),
+    "\n",
+    include_str!("../sql/experimental.sql"),
+);
+
 /// The hash of `SQL` a database records (`codevitals_sql()`) once its views and
 /// macros are those of this codevitals.
 pub fn sql_hash() -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(SQL.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sql_is_the_scan_sql_then_the_views() {
+        assert_eq!(
+            format!("{}{}", super::SCAN_SQL, super::VIEWS_SQL),
+            super::SQL
+        );
+    }
 }

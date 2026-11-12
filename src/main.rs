@@ -158,10 +158,11 @@ fn main() -> Result<()> {
             rev,
         } => {
             let repo = open_repo(&repo)?;
-            let mut db = open(&path, AccessMode::ReadWrite)?;
+            let (mut db, views) = db::open_for_scan(&path)?;
             let (commits, changes) = walk::walk(&mut db, &path, &repo, &rev)?;
             let blobs = parse::parse(&mut db, &repo)?;
             graph::derive(&mut db, graph::Cones::Stored)?;
+            views.map(db::Views::finish).transpose()?;
             eprintln!("scanned {commits} commits, {changes} changes; parsed {blobs} blobs");
         }
         Cli::Metrics {
