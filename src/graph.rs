@@ -40,25 +40,23 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
         [],
         |r| r.get(0),
     )?;
-    let events: Vec<(i32, i32, usize, usize, usize)> = if !imports {
-        Vec::new()
-    } else {
-        db.prepare(
-            "select since, 1, source, target, family(source) from import_edges
-             union all select until, -1, source, target, family(source) from import_edges
-             order by 1",
-        )?
-        .query_map([], |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                intern(&mut files, r.get(2)?),
-                intern(&mut files, r.get(3)?),
-                intern(&mut families, r.get(4)?),
-            ))
-        })?
-        .collect::<Result<_, _>>()?
-    };
+    // Each edge interval once (computing import_edges is most of the cost), as two
+    // events: the pair gains an import at `since` and loses it at `until`. Sorted
+    // here: DuckDB returns a large result out of order when it need not preserve
+    // insertion order (codevitals' setting), even under ORDER BY.
+    let mut events = Vec::<(i32, i32, usize, usize, usize)>::new();
+    if imports {
+        let mut edges =
+            db.prepare("select since, until, source, target, family(source) from import_edges")?;
+        let mut rows = edges.query([])?;
+        while let Some(r) = rows.next()? {
+            let (s, t) = (intern(&mut files, r.get(2)?), intern(&mut files, r.get(3)?));
+            let family = intern(&mut families, r.get(4)?);
+            events.push((r.get(0)?, 1, s, t, family));
+            events.push((r.get(1)?, -1, s, t, family));
+        }
+    }
+    events.sort_unstable_by_key(|e| e.0);
     let mut names = vec![String::new(); files.len()];
     for (name, id) in files {
         names[id] = name;
@@ -85,7 +83,7 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
                     adj[s].insert(t);
                 }
             } else {
-                *n -= 1;
+                *n = n.checked_sub(1).expect("an import ends after it starts");
                 if *n == 0 {
                     indegree[t] -= 1;
                     adj[s].remove(&t);

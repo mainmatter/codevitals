@@ -42,14 +42,16 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     // Every path a blob ever had, in order: the blob is parsed in the language of the
     // first one with a known extension (an empty __init__.py shares its blob with
     // every other empty file).
-    let paths: Vec<(String, String)> = db
+    let mut paths: Vec<(String, String)> = db
         .prepare(
             "select distinct blob, path from changes
-             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)
-             order by blob, path",
+             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)",
         )?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    // DuckDB returns a large result out of order when it need not preserve insertion
+    // order, even under ORDER BY: sort here.
+    paths.sort_unstable();
     let candidates: Vec<&[(String, String)]> = paths.chunk_by(|a, b| a.0 == b.0).collect();
     let langs: HashMap<&str, (&str, Lang)> = candidates
         .iter()
@@ -133,20 +135,21 @@ fn chains<'a>(
     db: &Connection,
     langs: &HashMap<&'a str, (&str, Lang)>,
 ) -> Result<Vec<Vec<&'a str>>> {
-    let versions: Vec<(String, String)> = db
+    let mut versions: Vec<(String, i32, String)> = db
         .prepare(
-            "select lineage, blob from lineages
-             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)
-             order by lineage, seq",
+            "select lineage, seq, blob from lineages
+             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
+    // Sorted here, not by ORDER BY (see `parse`).
+    versions.sort_unstable();
     let mut seen = HashSet::new();
     let mut chains = Vec::new();
     for lineage in versions.chunk_by(|a, b| a.0 == b.0) {
         let blobs: Vec<&str> = lineage
             .iter()
-            .filter_map(|(_, blob)| langs.get_key_value(blob.as_str()).map(|(b, _)| *b))
+            .filter_map(|(_, _, blob)| langs.get_key_value(blob.as_str()).map(|(b, _)| *b))
             .filter(|b| seen.insert(*b))
             .collect();
         chains.extend(blobs.chunks(CHAIN).map(<[_]>::to_vec));
