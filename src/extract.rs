@@ -4,7 +4,8 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
-use tree_sitter::{Node, Parser, Point, QueryCursor, StreamingIterator};
+use gix::diff::blob::{Algorithm, Diff, InternedInput};
+use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::Lang;
@@ -31,14 +32,147 @@ pub struct Span {
 /// Parse `src`, run the language's query and return the `file` span followed by
 /// every captured span in source order (outer before inner).
 pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
-    let language = (lang.grammar)();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&language)
-        .expect("grammar ABI is supported");
-    let tree = parser
+    let tree = parser(lang)
         .parse(src, None)
         .expect("parse has no timeout or cancellation");
+    spans(lang, src, &tree)
+}
+
+/// A parser for `lang`.
+fn parser(lang: Lang) -> Parser {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&(lang.grammar)())
+        .expect("grammar ABI is supported");
+    parser
+}
+
+/// `extract` over a sequence of blobs, each usually a version of the one before (a
+/// file's history): it parses each blob incrementally, reusing the syntax tree of the
+/// one before where their bytes agree. Its output is `extract`'s, whatever the order
+/// of the blobs; only its speed depends on how alike successive blobs are.
+pub struct Incremental {
+    /// The language, bytes and syntax tree of the last blob extracted.
+    last: Option<(Lang, Vec<u8>, Tree)>,
+    parser: Option<(Lang, Parser)>,
+}
+
+impl Default for Incremental {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Incremental {
+    pub fn new() -> Self {
+        Incremental {
+            last: None,
+            parser: None,
+        }
+    }
+
+    /// `extract(lang, src)`, parsing `src` as an edit of the last blob extracted.
+    pub fn extract(&mut self, lang: Lang, src: &[u8]) -> Vec<Span> {
+        let parser = match &mut self.parser {
+            Some((l, p)) if l.name == lang.name => p,
+            slot => &mut slot.insert((lang, parser(lang))).1,
+        };
+        let old = match self.last.take() {
+            Some((l, old_src, mut tree)) if l.name == lang.name => {
+                for edit in edits(&old_src, src) {
+                    tree.edit(&edit);
+                }
+                Some(tree)
+            }
+            _ => None,
+        };
+        let tree = parser
+            .parse(src, old.as_ref())
+            .expect("parse has no timeout or cancellation");
+        let spans = spans(lang, src, &tree);
+        self.last = Some((lang, src.to_vec(), tree));
+        spans
+    }
+}
+
+/// The edits that turn `old` into `new`, for `Tree::edit`: one per hunk of a line
+/// diff, last first, so each edit's start is at the same place in the text edited so
+/// far as in `old`.
+pub fn edits(old: &[u8], new: &[u8]) -> Vec<InputEdit> {
+    // Trim the common prefix and suffix, whole lines only, before diffing: most
+    // commits change a few lines of a long file.
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let prefix = old[..prefix]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Keep the suffix from its first line start: where it starts may be mid-line in
+    // one of the two.
+    let suffix = old[old.len() - suffix..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(0, |i| suffix - i - 1);
+    let (old_mid, new_mid) = (
+        &old[prefix..old.len() - suffix],
+        &new[prefix..new.len() - suffix],
+    );
+    if old_mid.is_empty() && new_mid.is_empty() {
+        return vec![];
+    }
+    // The row of the middle parts' start; it is at column 0 of both.
+    let row = old[..prefix].iter().filter(|&&b| b == b'\n').count();
+    // Where `text` ends when it starts at column 0 of `row`.
+    let end = |row: usize, text: &[u8]| match text.iter().rposition(|&b| b == b'\n') {
+        Some(i) => Point::new(
+            row + text.iter().filter(|&&b| b == b'\n').count(),
+            text.len() - i - 1,
+        ),
+        None => Point::new(row, text.len()),
+    };
+    // Hunks of whole lines of the middle parts. The last line may lack a newline.
+    let input = InternedInput::new(old_mid, new_mid);
+    let diff = Diff::compute(Algorithm::Histogram, &input);
+    let starts = |mid: &[u8]| {
+        let mut s = line_starts(mid);
+        if s.last() != Some(&mid.len()) {
+            s.push(mid.len());
+        }
+        s
+    };
+    let (old_starts, new_starts) = (starts(old_mid), starts(new_mid));
+    // Applied last hunk first, each hunk's edit sees `old` up to its end: its start
+    // and old end are where they are in `old`, and its new end is its start plus
+    // the new lines.
+    let mut out: Vec<InputEdit> = diff
+        .hunks()
+        .map(|h| {
+            let (before, after) = (
+                old_starts[h.before.start as usize]..old_starts[h.before.end as usize],
+                new_starts[h.after.start as usize]..new_starts[h.after.end as usize],
+            );
+            let start_row = row + h.before.start as usize;
+            InputEdit {
+                start_byte: prefix + before.start,
+                old_end_byte: prefix + before.end,
+                new_end_byte: prefix + before.start + after.len(),
+                start_position: Point::new(start_row, 0),
+                old_end_position: end(start_row, &old_mid[before]),
+                new_end_position: end(start_row, &new_mid[after]),
+            }
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+/// The spans of `src`, whose syntax tree is `tree`.
+fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
     let query = lang.compiled_query();
     let text = |n: Node| String::from_utf8_lossy(&src[n.byte_range()]).into_owned();
 

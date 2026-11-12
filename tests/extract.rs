@@ -1,4 +1,4 @@
-use codevitals::{LANGS, Lang, Span, extract};
+use codevitals::{Incremental, LANGS, Lang, Span, edits, extract};
 
 /// Kinds of control-flow structure, checked by `structure` instead of `check`.
 const STRUCTURE: [&str; 9] = [
@@ -770,4 +770,151 @@ fn manifests() {
             "alias_target:./gen/*"
         ]
     );
+}
+
+/// A line diff's edits, for `Tree::edit`: last hunk first, each in the coordinates of
+/// the text with the later hunks already applied.
+#[test]
+fn edits_of_a_line_diff() {
+    let edit = |e: &tree_sitter::InputEdit| {
+        let p = |p: tree_sitter::Point| format!("{}:{}", p.row, p.column);
+        format!(
+            "{}-{}>{} {}-{}>{}",
+            e.start_byte,
+            e.old_end_byte,
+            e.new_end_byte,
+            p(e.start_position),
+            p(e.old_end_position),
+            p(e.new_end_position)
+        )
+    };
+    let show = |old: &str, new: &str| {
+        edits(old.as_bytes(), new.as_bytes())
+            .iter()
+            .map(edit)
+            .collect::<Vec<_>>()
+    };
+    assert!(show("a\nb\n", "a\nb\n").is_empty());
+    // One line replaced by two.
+    assert_eq!(show("a\nb\nc\n", "a\nX\nY\nc\n"), ["2-4>6 1:0-2:0>3:0"]);
+    // Two hunks, the later first: the first's new end ignores the second's growth.
+    assert_eq!(
+        show("a\nb\nc\nd\n", "a\nB\nb\nc\nd\nE\n"),
+        ["8-8>10 4:0-4:0>5:0", "2-2>4 1:0-1:0>2:0"]
+    );
+    // A last line without a newline, a multi-byte character (columns are bytes) and
+    // a deletion to nothing.
+    assert_eq!(show("a\nb", "a\nbé"), ["2-3>5 1:0-1:1>1:3"]);
+    assert_eq!(show("a\nb\n", ""), ["0-4>0 0:0-2:0>0:0"]);
+    assert_eq!(show("", "x\r\ny"), ["0-0>4 0:0-0:0>1:1"]);
+}
+
+/// Incremental extraction gives exactly `extract`'s spans, whatever the edits between
+/// successive blobs: lines inserted, deleted, moved and mangled (into parse errors),
+/// line endings and the last newline toggled, multi-byte text, empty files, and a
+/// change of language.
+#[test]
+fn incremental_extraction_equals_extract() {
+    let samples = [
+        (
+            "x.rs",
+            "use std::io;\n\n/// Adds.\nfn add(a: i32, b: i32) -> i32 {\n    if a > b { a + b } else { b }\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(super::add(1, 2), 3); }\n}\nimpl Foo for Bar { fn x(&self) { todo!() } }\n",
+        ),
+        (
+            "x.c",
+            "#include <stdio.h>\n\nstatic int n = 0;\n/* TODO: more */\nint f(int a) {\n    for (int i = 0; i < a; i++) { n += i; }\n    return n;\n}\nint main(void) { return f(3); }\n",
+        ),
+        (
+            "x.cpp",
+            "#include \"a.h\"\nnamespace ns {\nclass A {\n  int f(int x) { return x ? 1 : 2; }\n};\n}\nvoid g() { throw 1; }\n",
+        ),
+        (
+            "x.py",
+            "import os\nfrom a import b\n\nclass C:\n    def f(self, x):\n        \"\"\"Doc.\"\"\"\n        if x:\n            return g(x)\n        raise ValueError()\n\ndef g(x):\n    return [i for i in x]\n",
+        ),
+        (
+            "x.ts",
+            "import a from './a';\n/** Adds. */\nexport function add(a: number, b: number) { return plus(a, b); }\nconst f = (x: number) => { while (x) { x--; } };\nclass K { m() { return 1; } }\n",
+        ),
+        (
+            "x.tsx",
+            "export const C = () => <div onClick={() => go()}>hi</div>;\nfunction go() { if (x) { return 1; } }\n",
+        ),
+        (
+            "x.js",
+            "const a = require('a');\nfunction f(x) {\n  switch (x) { case 1: return 2; default: throw new Error(); }\n}\nmodule.exports = { f };\n",
+        ),
+    ];
+    // A tiny deterministic generator: the test is the same every run.
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
+    let snippets = [
+        "{",
+        "}",
+        "(",
+        "é",
+        "日本",
+        "// TODO x\n",
+        "\"",
+        "/*",
+        "\n\n",
+        "\t",
+    ];
+    let mut incremental = Incremental::new();
+    let mut versions = 0;
+    for (path, sample) in samples {
+        let lang = Lang::of(path).unwrap();
+        let pool: Vec<String> = samples
+            .iter()
+            .filter(|(p, _)| Lang::of(p).unwrap().name == lang.name)
+            .flat_map(|(_, s)| s.lines().map(|l| format!("{l}\n")))
+            .collect();
+        let mut lines: Vec<String> = sample.lines().map(|l| format!("{l}\n")).collect();
+        let (mut crlf, mut last_newline) = (false, true);
+        for _ in 0..60 {
+            match next(9) {
+                0 | 1 => lines.insert(next(lines.len() + 1), pool[next(pool.len())].clone()),
+                2 if !lines.is_empty() => {
+                    lines.remove(next(lines.len()));
+                }
+                3 if !lines.is_empty() => {
+                    let i = next(lines.len());
+                    let line = lines.remove(i);
+                    lines.insert(next(lines.len() + 1), line);
+                }
+                4 | 5 if !lines.is_empty() => {
+                    let i = next(lines.len());
+                    let mut at = next(lines[i].len());
+                    while !lines[i].is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    lines[i].insert_str(at, snippets[next(snippets.len())]);
+                }
+                6 => crlf = !crlf,
+                7 => last_newline = !last_newline,
+                8 if next(8) == 0 => lines.clear(),
+                _ => {}
+            }
+            let mut src: String = lines.concat();
+            if !last_newline && src.ends_with('\n') {
+                src.pop();
+            }
+            if crlf {
+                src = src.replace('\n', "\r\n");
+            }
+            let fresh = extract(lang, src.as_bytes());
+            assert_eq!(
+                incremental.extract(lang, src.as_bytes()),
+                fresh,
+                "{path}:\n{src}"
+            );
+            versions += 1;
+        }
+    }
+    assert_eq!(versions, 7 * 60);
 }

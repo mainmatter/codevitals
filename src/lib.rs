@@ -7,7 +7,7 @@
 mod extract;
 mod languages;
 
-pub use extract::{Span, extract};
+pub use extract::{Incremental, Span, edits, extract};
 pub use languages::{KINDS, LANGS, Lang};
 
 /// The SQL every codevitals database is opened with, in order: the tables, helper views,

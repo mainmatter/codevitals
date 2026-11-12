@@ -1,10 +1,12 @@
 //! The parse: every changed blob with a known language into `spans`.
 
+use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use codevitals::{Lang, Span, extract};
+use codevitals::{Incremental, Lang, Span};
 use duckdb::{Connection, params};
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -43,52 +45,56 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     let candidates: Vec<&[(String, String)]> = paths.chunk_by(|a, b| a.0 == b.0).collect();
-    let todo: Vec<_> = candidates
+    let langs: HashMap<&str, (&str, Lang)> = candidates
         .iter()
         .filter_map(|paths| {
             paths
                 .iter()
-                .find_map(|(blob, path)| Some((blob, path, Lang::of(path)?)))
+                .find_map(|(blob, path)| Some((blob.as_str(), (path.as_str(), Lang::of(path)?))))
         })
         .collect();
+    let chains = chains(db, &langs)?;
     info!(
-        blobs = todo.len(),
-        unknown_language = candidates.len() - todo.len(),
+        blobs = langs.len(),
+        chains = chains.len(),
+        unknown_language = candidates.len() - langs.len(),
         stale_spans = stale,
         threads = rayon::current_num_threads(),
         listed = ?started.elapsed(),
         "parse"
     );
 
-    // Workers read and extract blobs in parallel, each with its own repository handle,
-    // while one writer appends them as they arrive. A message is one whole blob, so the
-    // writer's transactions never split a blob.
+    // Workers read and extract chains of blobs in parallel, each with its own
+    // repository handle, while one writer appends them as they arrive. A message is
+    // one whole blob, so the writer's transactions never split a blob.
     let repo = repo.clone().into_sync();
-    let total = todo.len();
+    let total = langs.len();
     let written = std::thread::scope(|s| {
         let (send, recv) = sync_channel(BATCH);
         let writer = s.spawn(move || write_spans(db, recv, total));
-        let produced = todo
-            .par_iter()
-            .map_init(
-                || repo.to_thread_local(),
-                |repo, &(blob, path, lang)| -> Result<Parsed<'_>> {
+        let produced = chains.par_iter().with_max_len(1).try_for_each_init(
+            || (repo.to_thread_local(), send.clone()),
+            |(repo, send), chain| -> Result<()> {
+                let mut incremental = Incremental::new();
+                for &blob in chain {
+                    let (path, lang) = langs[blob];
                     let src = repo
                         .find_blob(oid(blob))
                         .with_context(|| {
                             format!(
-                                "read blob {blob} ({path}); a partial clone (--filter) lacks file \
-                                 contents: clone without a filter"
+                                "read blob {blob} ({path}); a partial clone (--filter) lacks \
+                                 file contents: clone without a filter"
                             )
                         })?
                         .take_data();
-                    Ok((blob, lang, parse_blob(blob, path, lang, &src)?))
-                },
-            )
-            .try_for_each_with(send, |send, parsed| {
-                send.send(parsed?)
-                    .map_err(|_| anyhow!("the writer stopped"))
-            });
+                    let content = parse_blob(blob, path, lang, &src, &mut incremental)?;
+                    send.send((blob, lang, content))
+                        .map_err(|_| anyhow!("the writer stopped"))?;
+                }
+                Ok(())
+            },
+        );
+        drop(send);
         // A failed writer drops its receiver, which stops the workers: report its error first.
         let written = writer.join().expect("the writer does not panic")?;
         produced.map(|()| written)
@@ -96,6 +102,46 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     assert_eq!(written, total, "every listed blob is written");
     info!(blobs = written, elapsed = ?started.elapsed(), "parse done");
     Ok(written)
+}
+
+/// Most blobs a chain holds. Each chain starts with a parse from scratch, and the
+/// longest chain bounds how long the parse takes, so a file's long history is split.
+const CHAIN: usize = 32;
+
+/// The blobs of `langs` in chains to parse in order, each blob once: a chain holds
+/// successive versions of a file across renames (a lineage), so each but the first
+/// is parsed as an edit of the one before. A blob in several lineages joins the first.
+fn chains<'a>(
+    db: &Connection,
+    langs: &HashMap<&'a str, (&str, Lang)>,
+) -> Result<Vec<Vec<&'a str>>> {
+    let versions: Vec<(String, String)> = db
+        .prepare(
+            "select lineage, blob from lineages
+             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)
+             order by lineage, seq",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut seen = HashSet::new();
+    let mut chains = Vec::new();
+    for lineage in versions.chunk_by(|a, b| a.0 == b.0) {
+        let blobs: Vec<&str> = lineage
+            .iter()
+            .filter_map(|(_, blob)| langs.get_key_value(blob.as_str()).map(|(b, _)| *b))
+            .filter(|b| seen.insert(*b))
+            .collect();
+        chains.extend(blobs.chunks(CHAIN).map(<[_]>::to_vec));
+    }
+    // Every blob is in a lineage; any that is not still gets parsed.
+    let mut rest: Vec<&str> = langs
+        .keys()
+        .copied()
+        .filter(|b| !seen.contains(b))
+        .collect();
+    rest.sort_unstable();
+    chains.extend(rest.into_iter().map(|b| vec![b]));
+    Ok(chains)
 }
 
 /// A blob id, its language, and what parsing it gave.
@@ -179,8 +225,14 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
 /// byte), Git LFS pointers, and generated code (a marker such as "DO NOT EDIT" or
 /// "@generated" in the first five lines, or minified JavaScript: lines averaging over
 /// 110 bytes, as GitHub's Linguist decides). A panic in the parser becomes an error
-/// naming the blob.
-fn parse_blob(blob: &str, path: &str, lang: Lang, src: &[u8]) -> Result<Content> {
+/// naming the blob. `incremental` parses `src` as an edit of the blob it parsed last.
+fn parse_blob(
+    blob: &str,
+    path: &str,
+    lang: Lang,
+    src: &[u8],
+    incremental: &mut Incremental,
+) -> Result<Content> {
     debug!(%blob, %path, lang = lang.name, bytes = src.len(), "blob");
     if let Some(reason) = skip(src) {
         debug!(%blob, %path, reason, "not parsed");
@@ -191,17 +243,18 @@ fn parse_blob(blob: &str, path: &str, lang: Lang, src: &[u8]) -> Result<Content>
         return Ok(Content::Generated);
     }
     let started = Instant::now();
-    let spans = std::panic::catch_unwind(|| extract(lang, src)).map_err(|panic| {
-        let message = panic
-            .downcast_ref::<&str>()
-            .map(|m| m.to_string())
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_default();
-        anyhow!(
-            "extracting {path} (blob {blob}, {}) panicked: {message}",
-            lang.name
-        )
-    })?;
+    let spans = std::panic::catch_unwind(AssertUnwindSafe(|| incremental.extract(lang, src)))
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .map(|m| m.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            anyhow!(
+                "extracting {path} (blob {blob}, {}) panicked: {message}",
+                lang.name
+            )
+        })?;
     let elapsed = started.elapsed();
     if elapsed > SLOW_BLOB {
         warn!(%blob, %path, bytes = src.len(), ?elapsed, "slow blob");
