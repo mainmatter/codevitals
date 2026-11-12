@@ -42,29 +42,34 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
         "insert into codevitals values (?, ?, ?)",
         params![SCHEMA, V, git_dir.to_string_lossy()],
     )?;
-    // Every path a blob ever had, in order: the blob is parsed in the language of the
-    // first one with a known extension (an empty __init__.py shares its blob with
-    // every other empty file).
-    let mut paths: Vec<(String, String)> = db
+    // Every version of each blob to parse: its lineage, seq and path. Sorted here, as
+    // DuckDB returns a large result out of order even under ORDER BY (see db.rs).
+    let mut versions: Vec<(String, i32, String, String)> = db
         .prepare(
-            "select distinct blob, path from changes
+            "select lineage, seq, blob, path from lineages
              where blob in (select blob from parse_candidates) and blob not in (select blob from spans)",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
-    // DuckDB returns a large result out of order when it need not preserve insertion
-    // order, even under ORDER BY: sort here.
+    versions.sort_unstable();
+    // A blob is parsed in the language of its first path (by name) with a known
+    // extension: an empty __init__.py shares its blob with every other empty file.
+    let mut paths: Vec<(&str, &str)> = versions
+        .iter()
+        .map(|v| (v.2.as_str(), v.3.as_str()))
+        .collect();
     paths.sort_unstable();
-    let candidates: Vec<&[(String, String)]> = paths.chunk_by(|a, b| a.0 == b.0).collect();
+    paths.dedup();
+    let candidates: Vec<&[(&str, &str)]> = paths.chunk_by(|a, b| a.0 == b.0).collect();
     let langs: HashMap<&str, (&str, Lang)> = candidates
         .iter()
         .filter_map(|paths| {
             paths
                 .iter()
-                .find_map(|(blob, path)| Some((blob.as_str(), (path.as_str(), Lang::of(path)?))))
+                .find_map(|&(blob, path)| Some((blob, (path, Lang::of(path)?))))
         })
         .collect();
-    let chains = chains(db, &langs)?;
+    let chains = chains(&versions, &langs);
     info!(
         blobs = langs.len(),
         chains = chains.len(),
@@ -132,40 +137,24 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
 const CHAIN: usize = 32;
 
 /// The blobs of `langs` in chains to parse in order, each blob once: a chain holds
-/// successive versions of a file across renames (a lineage), so each but the first
-/// is parsed as an edit of the one before. A blob in several lineages joins the first.
+/// successive versions of a file across renames (a lineage, from `versions` sorted
+/// by lineage and seq), so each but the first is parsed as an edit of the one before.
+/// A blob in several lineages joins the first.
 fn chains<'a>(
-    db: &Connection,
-    langs: &HashMap<&'a str, (&str, Lang)>,
-) -> Result<Vec<Vec<&'a str>>> {
-    let mut versions: Vec<(String, i32, String)> = db
-        .prepare(
-            "select lineage, seq, blob from lineages
-             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)",
-        )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<Result<_, _>>()?;
-    // Sorted here, not by ORDER BY (see `parse`).
-    versions.sort_unstable();
+    versions: &'a [(String, i32, String, String)],
+    langs: &HashMap<&str, (&str, Lang)>,
+) -> Vec<Vec<&'a str>> {
     let mut seen = HashSet::new();
     let mut chains = Vec::new();
     for lineage in versions.chunk_by(|a, b| a.0 == b.0) {
         let blobs: Vec<&str> = lineage
             .iter()
-            .filter_map(|(_, _, blob)| langs.get_key_value(blob.as_str()).map(|(b, _)| *b))
-            .filter(|b| seen.insert(*b))
+            .map(|v| v.2.as_str())
+            .filter(|b| langs.contains_key(b) && seen.insert(*b))
             .collect();
         chains.extend(blobs.chunks(CHAIN).map(<[_]>::to_vec));
     }
-    // Every blob is in a lineage; any that is not still gets parsed.
-    let mut rest: Vec<&str> = langs
-        .keys()
-        .copied()
-        .filter(|b| !seen.contains(b))
-        .collect();
-    rest.sort_unstable();
-    chains.extend(rest.into_iter().map(|b| vec![b]));
-    Ok(chains)
+    chains
 }
 
 /// A blob id, its language, and what parsing it gave.
