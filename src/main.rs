@@ -71,6 +71,17 @@ enum Cli {
         #[arg(long, value_enum, default_value_t = diff::Format::Json)]
         format: diff::Format,
     },
+    /// Rank the production files of the newest scanned commit by how often they
+    /// changed recently times their decision points: where change meets complexity.
+    Hotspots {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Files to list.
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        #[arg(long, value_enum, default_value_t = diff::Format::Text)]
+        format: diff::Format,
+    },
     /// Export the production files and functions at one scanned commit, with the
     /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
     /// A function keeps its `function` id across versions while its file and name do.
@@ -152,6 +163,19 @@ fn main() -> Result<()> {
             print!("{}", diff::diff(&repo, &db, &base, &head, top, format)?);
             if matches!(format, diff::Format::Json) {
                 println!();
+            }
+        }
+        Cli::Hotspots {
+            db: path,
+            top,
+            format,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let json = matches!(format, diff::Format::Json);
+            let out = units::hotspots(&mut db, top, json)?;
+            match json {
+                true => println!("{out}"),
+                false => print!("{out}"),
             }
         }
         Cli::Units {

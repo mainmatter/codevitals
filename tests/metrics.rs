@@ -697,3 +697,47 @@ fn units_follow_files_and_functions() {
     let err = fails(&r.dir, &["units", "-", "--rev", "ffffffff"]);
     assert!(err.contains("no scanned commit"), "{err}");
 }
+
+/// Hotspots rank live production files by recent changes times decision points,
+/// following renames; files changed only by bulk commits or long ago count no change.
+#[test]
+fn hotspots_rank_change_times_complexity() {
+    let busy = |n: usize| {
+        format!(
+            "fn f(x: i32) -> i32 {{\n    if x > {n} {{ 1 }} else {{ 2 }}\n}}\n\nfn a() {{}}\n\nfn b() {{}}\n"
+        )
+    };
+    let complex = "fn g(x: i32) -> i32 { if x > 1 { if x > 2 { 3 } else { 4 } } else { 5 } }\n";
+    let mut r = common::Repo::new();
+    r.write("busy.rs", busy(0))
+        .write("complex.rs", complex)
+        .write("old.rs", complex);
+    r.commit("main", "c0\n", 0, &[]);
+    for day in 400..404 {
+        r.write("busy.rs", busy(day as usize));
+        r.extend("edit\n", day);
+    }
+    r.remove("busy.rs").write("src/busy.rs", busy(9)); // a rename keeps the count
+    r.write("complex.rs", format!("{complex}\n"));
+    r.extend("move\n", 404);
+    scan(&r.dir, "main");
+    // busy: 5 changes x 1 decision; complex: 1 x 2; old.rs: no change within a year.
+    assert_rows(
+        &r.dir,
+        "select rank, path, changes, decisions, score from units.hotspots order by rank, path",
+        "(1,src/busy.rs,5,1,5) (2,complex.rs,1,2,2) (3,old.rs,0,2,0)",
+    );
+    let text = succeeds(&r.dir, &["hotspots"]);
+    assert!(
+        text.lines()
+            .nth(1)
+            .unwrap()
+            .ends_with("5 changes x    1 decisions  src/busy.rs"),
+        "{text}"
+    );
+    assert_eq!(
+        text.lines().count(),
+        3,
+        "files without recent changes are left out: {text}"
+    );
+}

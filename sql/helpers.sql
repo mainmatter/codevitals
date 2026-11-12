@@ -8,6 +8,7 @@ create or replace macro rework_days() as 7;     -- days within which a repeat ch
 create or replace macro clone_tokens() as 50;   -- smallest function counted by duplication
 create or replace macro large_tokens() as 200;  -- functions above this count toward concentration
 create or replace macro deep_nesting() as 3;    -- functions nested deeper than this count as deeply nested
+create or replace macro hotspot_days() as 365; -- trailing period whose changes hotspots count
 -- Cargo features whose code counts as test code by name alone (more may be declared
 -- per path in .gitattributes: codevitals-test-features=a,b).
 create or replace macro test_feature(f) as

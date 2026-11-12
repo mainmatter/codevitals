@@ -40,3 +40,44 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
         r#"{{"seq":{seq},"id":"{id}","files":{files},"functions":{functions}}}"#
     ))
 }
+
+/// The `top` hotspots at the newest scanned commit (`units.hotspots`), as JSON
+/// (`{"seq":..,"id":..,"days":..,"validated":false,"files":[..]}`) or as text.
+pub fn hotspots(db: &mut Connection, top: usize, json: bool) -> Result<String> {
+    crate::metrics::cache_helpers(db)?;
+    let (seq, id, days): (i32, String, i32) = db.query_row(
+        "select seq, id, hotspot_days() from commits order by seq desc limit 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let query =
+        format!("select * from units.hotspots where score > 0 order by rank, path limit {top}");
+    if json {
+        let files: String = db.query_row(
+            &format!("select coalesce(json_group_array(t), '[]') from ({query}) t"),
+            [],
+            |r| r.get(0),
+        )?;
+        return Ok(format!(
+            r#"{{"seq":{seq},"id":"{id}","days":{days},"validated":false,"files":{files}}}"#
+        ));
+    }
+    let mut out = format!(
+        "hotspots at {}: changes in the last {days} days x decision points (unvalidated)\n",
+        &id[..10]
+    );
+    let rows: Vec<(i64, String, i64, i64, i64)> = db
+        .prepare(&format!(
+            "select rank, path, changes, decisions, score from ({query})"
+        ))?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    for (rank, path, changes, decisions, score) in rows {
+        out.push_str(&format!(
+            "{rank:>4}  {score:>7}  {changes:>4} changes x {decisions:>4} decisions  {path}\n"
+        ));
+    }
+    Ok(out)
+}
