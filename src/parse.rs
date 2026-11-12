@@ -162,16 +162,7 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
 /// naming the blob.
 fn parse_blob(blob: &str, path: &str, lang: Lang, src: &[u8]) -> Result<Content> {
     debug!(%blob, %path, lang = lang.name, bytes = src.len(), "blob");
-    let skip = if src.len() > MAX_BLOB_BYTES {
-        Some("exceeds MAX_BLOB_BYTES")
-    } else if src[..src.len().min(8192)].contains(&0) {
-        Some("binary")
-    } else if src.starts_with(b"version https://git-lfs.github.com/spec/") {
-        Some("a Git LFS pointer")
-    } else {
-        None
-    };
-    if let Some(reason) = skip {
+    if let Some(reason) = skip(src) {
         debug!(%blob, %path, reason, "not parsed");
         return Ok(Content::Skipped);
     }
@@ -197,6 +188,24 @@ fn parse_blob(blob: &str, path: &str, lang: Lang, src: &[u8]) -> Result<Content>
     }
     debug!(%blob, spans = spans.len(), ?elapsed, "extracted");
     Ok(Content::Code(spans))
+}
+
+/// Why `src` is not source code to parse, if it is not.
+fn skip(src: &[u8]) -> Option<&'static str> {
+    if src.len() > MAX_BLOB_BYTES {
+        Some("exceeds MAX_BLOB_BYTES")
+    } else if src[..src.len().min(8192)].contains(&0) {
+        Some("binary")
+    } else if src.starts_with(b"version https://git-lfs.github.com/spec/") {
+        Some("a Git LFS pointer")
+    } else {
+        None
+    }
+}
+
+/// Whether codevitals parses `src` as `lang`: source code, not generated.
+pub fn parseable(lang: Lang, src: &[u8]) -> bool {
+    skip(src).is_none() && !is_generated(lang, src)
 }
 
 /// Markers that code generators write near the top of their output: Go's `Code

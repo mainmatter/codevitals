@@ -12,8 +12,11 @@ use gix::ObjectId;
 use gix::object::tree::diff::ChangeDetached as Change;
 use tracing::{debug, info};
 
+use codevitals::Lang;
+
 use crate::attributes::Attributes;
 use crate::db::{BATCH, oid};
+use crate::parse::parseable;
 
 /// Extend `commits` and `changes` with REV's first-parent chain past the stored tip.
 pub fn walk(
@@ -109,10 +112,17 @@ pub fn walk(
             })()
             .with_context(|| format!("read commit {id}"))?;
             commits.append_row(params![seq, id.to_string(), time, name, email, message])?;
-            for (path, (blob, _)) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
-                attributes.set(path, blob.as_deref().map(read).transpose()?);
+            for (path, row) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
+                attributes.set(path, row.blob.as_deref().map(read).transpose()?);
             }
-            for (path, (blob, source)) in &rows {
+            for (path, row) in &rows {
+                let Row {
+                    blob,
+                    source,
+                    lines,
+                    ..
+                } = row;
+                let (added, deleted) = lines.unzip();
                 let (attr, test_features) = match blob {
                     Some(_) => (
                         attributes
@@ -122,7 +132,16 @@ pub fn walk(
                     ),
                     None => (None, None),
                 };
-                changed.append_row(params![seq, path, blob, attr, test_features, source])?;
+                changed.append_row(params![
+                    seq,
+                    path,
+                    blob,
+                    attr,
+                    test_features,
+                    source,
+                    added,
+                    deleted
+                ])?;
             }
             debug!(seq, %id, changes = rows.len(), elapsed = ?diffing.elapsed(), "commit");
             seq += 1;
@@ -168,9 +187,19 @@ fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Resul
     Ok(count)
 }
 
-/// A commit's change to one path: its new blob (`None` when the file is gone), and
-/// the path it was renamed from.
-type Row = (Option<String>, Option<String>);
+/// A commit's change to one path.
+#[derive(Default)]
+struct Row {
+    /// The new blob, `None` when the file is gone.
+    blob: Option<String>,
+    /// The path the file was renamed from.
+    source: Option<String>,
+    /// The blob the change replaces, to count lines against.
+    old: Option<String>,
+    /// Lines added and deleted; `None` for a file codevitals does not parse (see
+    /// `parse::parseable`), and for the deletion a rename implies.
+    lines: Option<(i32, i32)>,
+}
 
 /// A commit's changes against its first parent (the root's against the empty tree):
 /// each changed path with its new blob and, for a rename, its source path, which
@@ -214,15 +243,25 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
                     (true, true) => {
                         let source = path_text(source_location);
                         if !copy {
-                            insert(source.clone(), (None, None))?;
+                            insert(source.clone(), Row::default())?;
                         }
-                        insert(path_text(c.location()), (new, Some(source)))?;
+                        let row = Row {
+                            blob: new,
+                            source: Some(source),
+                            old,
+                            lines: None,
+                        };
+                        insert(path_text(c.location()), row)?;
                         continue;
                     }
                     // A symlink or submodule on either side: no file was renamed.
                     _ => {
                         if old.is_some() && !copy {
-                            insert(path_text(source_location), (None, None))?;
+                            let row = Row {
+                                old,
+                                ..Row::default()
+                            };
+                            insert(path_text(source_location), row)?;
                         }
                         (None, new)
                     }
@@ -230,10 +269,47 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
             }
         };
         if old != new {
-            insert(path_text(c.location()), (new, None))?;
+            let row = Row {
+                blob: new,
+                old,
+                ..Row::default()
+            };
+            insert(path_text(c.location()), row)?;
+        }
+    }
+    for (path, row) in rows.iter_mut() {
+        let renamed_away = row.blob.is_none() && row.old.is_none();
+        if renamed_away || Lang::of(path).is_none() {
+            continue;
+        }
+        let read = |blob: &Option<String>| -> Result<Option<Vec<u8>>> {
+            Ok(match blob {
+                Some(id) => Some(repo.find_blob(oid(id))?.take_data()),
+                None => None,
+            })
+        };
+        let (old, new) = (read(&row.old)?, read(&row.blob)?);
+        let lang = Lang::of(path).expect("checked above");
+        let parseable =
+            |src: &Option<Vec<u8>>| src.as_deref().is_none_or(|src| parseable(lang, src));
+        if parseable(&old) && parseable(&new) {
+            row.lines = Some(line_changes(
+                old.as_deref().unwrap_or_default(),
+                new.as_deref().unwrap_or_default(),
+            ));
         }
     }
     Ok(rows)
+}
+
+/// Lines added and deleted from `old` to `new`, as `git diff --numstat` counts them
+/// (Myers' algorithm, so counts may differ from git's in rare ties).
+fn line_changes(old: &[u8], new: &[u8]) -> (i32, i32) {
+    use gix::diff::blob::{Algorithm, Diff, InternedInput};
+    let input = InternedInput::new(old, new);
+    let diff = Diff::compute(Algorithm::Myers, &input);
+    let int = |n: u32| i32::try_from(n).expect("line counts fit in i32");
+    (int(diff.count_additions()), int(diff.count_removals()))
 }
 
 /// A path as text: as is when it is UTF-8, else with each byte of an invalid

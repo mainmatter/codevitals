@@ -58,6 +58,14 @@ fn fixture_tables() {
              (2,README.md,NULL,NULL) (2,src/b.rs,NULL,NULL) (2,src/c.rs,{plus},src/b.rs) (3,d.rs,{d},NULL)"
         ),
     );
+    // Lines added and deleted: none counted for README.md (not code) or for the
+    // deletion the rename implies; the rename itself edits no line.
+    assert_rows(
+        dir,
+        "select seq, path, added, deleted from changes order by seq, path",
+        "(0,README.md,NULL,NULL) (0,a.rs,3,0) (1,a.rs,1,0) (1,src/b.rs,3,0) \
+         (2,README.md,NULL,NULL) (2,src/b.rs,NULL,NULL) (2,src/c.rs,0,0) (3,d.rs,1,0)",
+    );
     // src/c.rs continues the lineage of src/b.rs, which it was renamed from.
     assert_rows(
         dir,
@@ -152,6 +160,12 @@ fn renames_continue_lineages() {
         "select seq, path, source, lineage from lineages order by seq, path",
         "(0,a.rs,NULL,0:a.rs) (0,z.rs,NULL,0:z.rs) (1,a.rs,NULL,0:a.rs) (1,src/a.rs,a.rs,0:a.rs) \
          (2,lib/b.rs,src/a.rs,0:a.rs) (2,src/a.rs,NULL,0:a.rs) (3,z.rs,NULL,0:z.rs) (4,z.rs,NULL,4:z.rs)",
+    );
+    // Lines change against the source for a rename; a deletion deletes every line.
+    assert_rows(
+        &r.dir,
+        "select seq, path, added, deleted from changes where seq >= 2 order by seq, path",
+        "(2,lib/b.rs,1,0) (2,src/a.rs,NULL,NULL) (3,z.rs,0,3) (4,z.rs,1,0)",
     );
     // The deletions a rename implies are no changes of their own.
     assert_rows(

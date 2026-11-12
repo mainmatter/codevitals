@@ -13,9 +13,12 @@ create table if not exists mailmap (
 -- attr: the role .gitattributes give the path at that commit; test_features: the
 -- cargo features they declare test-only there, joined by `,` (attributes.rs).
 -- source: the path the file was renamed from (walk.rs), which has a row of its own
--- with a NULL blob.
+-- with a NULL blob. added, deleted: lines, against the file's previous blob (at the
+-- source path for a rename); NULL for files codevitals does not parse (unknown
+-- language, binary, generated, too large) and for the deletion a rename implies.
 create table if not exists changes (
-  seq integer, path text, blob text, attr text, test_features text, source text);
+  seq integer, path text, blob text, attr text, test_features text, source text,
+  added integer, deleted integer);
 create table if not exists spans (
   blob text, v integer, lang text, kind text, name text,
   line integer, end_line integer, tokens integer, comments integer,

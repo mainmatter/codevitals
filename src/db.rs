@@ -10,7 +10,7 @@ use xxhash_rust::xxh3::xxh3_64;
 /// Extractor version. Bump whenever `extract` output could change for any input.
 pub const V: i32 = 2;
 /// Database layout version. Bump whenever a table changes; older databases are refused.
-pub const SCHEMA: i32 = 4;
+pub const SCHEMA: i32 = 5;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its
 /// size, so batching dominates throughput; an interrupt loses at most one batch.
 pub const BATCH: usize = 500;
