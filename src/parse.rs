@@ -27,11 +27,14 @@ const SLOW_BLOB: Duration = Duration::from_secs(1);
 pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     let started = Instant::now();
     let stale = db.execute("delete from spans where v <> ?", [V])?;
-    // Fingerprints of blobs whose spans are gone are reparsed with them.
-    db.execute(
-        "delete from fingerprints where blob not in (select blob from spans)",
-        [],
-    )?;
+    // Fingerprints of blobs whose spans are gone are reparsed with them. Otherwise
+    // there are none: a blob's spans and fingerprints are written in one transaction.
+    if stale > 0 {
+        db.execute(
+            "delete from fingerprints where blob not in (select blob from spans)",
+            [],
+        )?;
+    }
     let git_dir =
         std::fs::canonicalize(repo.git_dir()).unwrap_or_else(|_| repo.git_dir().to_path_buf());
     db.execute("delete from codevitals", [])?;
@@ -441,7 +444,7 @@ fn is_generated(lang: Lang, src: &[u8]) -> bool {
             .iter()
             .any(|m| line.windows(m.len()).any(|w| w == m.as_bytes()))
     });
-    let lines = src.iter().filter(|&&b| b == b'\n').count().max(1);
     let ecma = ["typescript", "tsx", "javascript"].contains(&lang.name);
-    marked || (ecma && src.len() / lines > 110)
+    let minified = || src.len() / src.iter().filter(|&&b| b == b'\n').count().max(1) > 110;
+    marked || (ecma && minified())
 }
