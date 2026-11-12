@@ -19,8 +19,6 @@ cv metrics --help          # list the metrics
 cv units units.json        # the production files and functions behind them, at the newest commit
 cv diff main~10 main       # each metric's change over a range, and the functions and files behind it
 cv hotspots                # files ranked by recent changes times decision points
-cv label                   # judge pairs of functions: which would you rather have to change?
-cv validate                # does each per-function metric predict those judgments better than size?
 cv experimental out.json   # candidate metrics without evidence yet (kept off the dashboard)
 ```
 
@@ -99,6 +97,11 @@ for the path, as above.
 - codevitals needs the full history: deepen shallow clones first.
 
 ## Development
+
+Two hidden commands check whether metrics measure anything: `cv label` asks you
+which of two functions you would rather have to change, and `cv validate` reports
+how well each metric predicts those judgments and next-window defect fixes,
+against size and change count (`validation/README.md`).
 
 `nix develop` (or direnv) gives the pinned toolchain, the `duckdb` CLI and
 `cv-grafana`; `cargo test` runs in seconds. Metrics are views in

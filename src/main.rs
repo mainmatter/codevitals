@@ -101,6 +101,7 @@ enum Cli {
     /// Judge pairs of functions side by side: which would you rather have to change?
     /// Left, right, or can't tell; q quits, and the next session resumes. Judgments
     /// are appended to the labels file; your git user.email names you as rater.
+    #[command(hide = true)] // for developing codevitals' metrics, not for users
     Label {
         #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
@@ -114,6 +115,7 @@ enum Cli {
     /// Check per-function metrics against the labels of `cv label`: how often the
     /// function with the higher value is the one raters would rather not change,
     /// against token count as baseline, with raters' self-agreement and agreement.
+    #[command(hide = true)] // for developing codevitals' metrics, not for users
     Validate {
         #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
