@@ -807,3 +807,39 @@ fn orphaning_counts_departed_authors() {
         "(4,0.5,1,2)",
     );
 }
+
+/// Accretion: changes that make an existing function branchier or deeper; new
+/// functions and pure moves do not count.
+#[test]
+fn accretion_counts_growth_of_existing_functions() {
+    let mut r = common::Repo::new();
+    let base = "fn f(x: i32) -> i32 {\n    x\n}\n\nfn keep() {}\n\nfn other() {}\n";
+    r.write("a.rs", base);
+    r.commit("main", "c0\n", 0, &[]);
+    let grown = base.to_owned() + "fn g(x: i32) -> i32 {\n    if x > 0 { 1 } else { 2 }\n}\n";
+    r.write("a.rs", &grown); // a new function: no accretion
+    r.extend("add g\n", 1);
+    let deeper = grown.replace("    x\n", "    if x > 1 { x } else { 0 }\n");
+    r.write("a.rs", &deeper); // f gains a decision: accretion
+    r.extend("grow f\n", 2);
+    r.remove("a.rs").write("src/a.rs", &deeper); // a pure move: no touch
+    r.extend("move\n", 3);
+    r.write(
+        "src/a.rs",
+        deeper.replace("fn keep() {}", "fn keep() { let _y = 1; }"),
+    );
+    r.extend("edit keep\n", 4);
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 4");
+    assert_rows(
+        &r.dir,
+        "select seq, path, raised from units.touches order by seq",
+        "(1,a.rs,false) (2,a.rs,true) (4,src/a.rs,false)",
+    );
+    // Window c1..c4: three touches of one lineage, one raising.
+    assert_rows(
+        &r.dir,
+        "select seq, round(value, 4), files, touches from metrics.accretion order by seq",
+        "(4,0.3333,1,3)",
+    );
+}

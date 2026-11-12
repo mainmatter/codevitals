@@ -102,3 +102,24 @@ from points p join units.files f on f.since <= p.seq and p.seq < f.until
 left join per_file o on o.seq = p.seq and o.lineage = f.lineage;
 
 comment on view units.orphaning is 'Per weekly window point (seq) and live production file: changes (non-bulk, renames followed, up to then) and orphaned, the share of them by authors with no commit in the orphan_months() before. Unvalidated.';
+
+-- Accretion per touch: each change to a production file that has a previous version
+-- (pure moves left out), and whether it raised the decision points or the nesting of
+-- a function that existed before it (same `function` identity; new functions do
+-- not count).
+create or replace view units.touches as
+with t as (
+  select x.seq, x.lineage, x.path
+  from code_changes x
+  where x.blob is not null
+    and x.blob is distinct from (select l.blob from lineages l where l.lineage = x.lineage and l.seq < x.seq
+                                 order by l.seq desc limit 1)
+    and exists (select 1 from lineages l where l.lineage = x.lineage and l.seq < x.seq and l.blob is not null)),
+raised as (
+  select distinct c.since as seq, c.lineage
+  from units.functions c join units.functions p on p.function = c.function and p.until = c.since
+  where c.decisions > p.decisions or c.nesting > p.nesting)
+select t.seq, t.lineage, t.path, r.lineage is not null as raised
+from t left join raised r using (seq, lineage);
+
+comment on view units.touches is 'Each change (seq) to a production file with a previous version, pure moves left out, and raised: whether it added decision points or nesting to a function that existed before (same function identity). Unvalidated.';

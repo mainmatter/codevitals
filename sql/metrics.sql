@@ -208,6 +208,25 @@ Read: 0.3 means three tenths of the code was mostly written by people no longer 
 
 Trend: rising means knowledge of more code leaves with its authors: that code is changed by people who did not write it. Separate from ownership, which looks at who changes files now. Unvalidated.';
 
+create or replace view metrics.accretion as
+with per_file as (
+  select w.win, t.lineage, count(*) as touches, count(*) filter (t.raised) as raised,
+         any_value(w.span_weeks) as span_weeks
+  from windows w join units.touches t using (seq)
+  where t.seq in (select seq from change_weights)
+  group by all having count(*) >= accretion_touches())
+select win as seq, sum(raised) / sum(touches) as value, avg(raised / touches) as mean_file,
+       count(*) as files, sum(touches) as touches, any_value(span_weeks) as span_weeks
+from per_file group by win;
+
+comment on view metrics.accretion is 'CHANGES: Changes that grow existing functions
+
+What: of the changes to files changed at least 3 times in the last 100 code commits, the share that add decision points or nesting to a function that already existed, each week. New functions do not count. mean_file is the same share averaged over files. Lower is better.
+
+Read: 0.4 means two in five such changes made an existing function branchier or deeper rather than adding a new one.
+
+Trend: rising means logic accretes in place: functions grow with each change instead of being split. Unvalidated.';
+
 create or replace view metrics.function_decisions as
 select seq, p90 as value, max, share, functions from function_tail('decisions', many_decisions());
 

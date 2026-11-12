@@ -13,6 +13,7 @@ create or replace macro many_params() as 5;      -- functions with more paramete
 create or replace macro hotspot_days() as 365; -- trailing period whose changes hotspots count
 create or replace macro defect_window_days() as 182; -- windows of the defect check in cv validate
 create or replace macro orphan_months() as 12;   -- an author without a commit for this long has left
+create or replace macro accretion_touches() as 3; -- files touched fewer times in a window are left out of accretion
 create or replace macro orphaned_share() as 0.5; -- files with more of their changes by departed authors are orphaned
 -- Cargo features whose code counts as test code by name alone (more may be declared
 -- per path in .gitattributes: codevitals-test-features=a,b).
