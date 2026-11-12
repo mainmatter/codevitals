@@ -9,7 +9,6 @@
 //! the difference over the judgments both metrics decide. A metric is supported only
 //! if its interval excludes 0.5 and the difference's interval lies above 0.
 
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -187,58 +186,41 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
     let labels = crate::labels::load(db, file)?;
     // Each label's two functions with their metrics (any declared test features: the
     // facts of a function do not depend on them unless it is test code).
-    let columns: Vec<String> = METRICS
-        .iter()
-        .map(|m| format!("a.{m}::double, b.{m}::double"))
-        .collect();
-    let query = format!(
+    let with = format!(
         "with f as (
            select blob, start_byte, end_byte, any_value(columns(['{}'])) from function_facts
-           group by blob, start_byte, end_byte)
-         select l.choice, a.blob is not null and b.blob is not null, {}
-         from labels l
-         left join f a on a.blob = l.a_blob and a.start_byte = l.a_start and a.end_byte = l.a_end
-         left join f b on b.blob = l.b_blob and b.start_byte = l.b_start and b.end_byte = l.b_end
-         order by l.rater, l.n",
-        METRICS.join("', '"),
-        columns.join(", ")
+           group by blob, start_byte, end_byte)",
+        METRICS.join("', '")
     );
-    let mut judgments = Vec::new();
-    let (mut decided, mut unknown) = (0, 0);
-    let mut stmt = db.prepare(&query)?;
-    let mut rows = stmt.query([])?;
-    while let Some(r) = rows.next()? {
-        let choice: String = r.get(0)?;
-        let known: bool = r.get(1)?;
-        if !known {
-            unknown += 1;
-            continue;
-        }
-        if choice == "same" {
-            continue;
-        }
-        decided += 1;
-        let signs = (0..METRICS.len())
-            .map(|i| -> duckdb::Result<i8> {
-                // A metric a function lacks (no parameter list: params is NULL)
-                // decides nothing.
-                let (a, b): (Option<f64>, Option<f64>) = (r.get(2 + 2 * i)?, r.get(3 + 2 * i)?);
-                let (Some(a), Some(b)) = (a, b) else {
-                    return Ok(0);
-                };
-                // The function the rater would rather not change: the one not chosen.
-                let (kept, chosen) = if choice == "a" { (b, a) } else { (a, b) };
-                Ok(match kept.partial_cmp(&chosen) {
-                    Some(std::cmp::Ordering::Greater) => 1,
-                    Some(std::cmp::Ordering::Less) => -1,
-                    _ => 0,
-                })
-            })
-            .collect::<duckdb::Result<_>>()?;
-        judgments.push(signs);
-    }
-    drop(rows);
-    drop(stmt);
+    let joins = "from labels l
+         left join f a on a.blob = l.a_blob and a.start_byte = l.a_start and a.end_byte = l.a_end
+         left join f b on b.blob = l.b_blob and b.start_byte = l.b_start and b.end_byte = l.b_end";
+    let unknown: usize = db.query_row(
+        &format!("{with} select count(*) filter (a.blob is null or b.blob is null) {joins}"),
+        [],
+        |r| r.get(0),
+    )?;
+    // Per decided judgment and metric: 1 when the function the rater would rather
+    // not change (the one not chosen) has more, -1 less, 0 the same; a metric a
+    // function lacks (no parameter list: params is NULL) decides nothing.
+    let signs: Vec<String> = METRICS
+        .iter()
+        .map(|m| {
+            format!(
+                "coalesce(sign(case l.choice when 'a' then b.{m} - a.{m} else a.{m} - b.{m} end), 0)::tinyint"
+            )
+        })
+        .collect();
+    let judgments: Vec<Vec<i8>> = db
+        .prepare(&format!(
+            "{with} select {} {joins}
+             where a.blob is not null and b.blob is not null and l.choice <> 'same'
+             order by l.rater, l.n",
+            signs.join(", ")
+        ))?
+        .query_map([], |r| (0..METRICS.len()).map(|i| r.get(i)).collect())?
+        .collect::<Result<_, _>>()?;
+    let decided = judgments.len();
     let metrics = (0..METRICS.len()).map(|i| support(&judgments, i)).collect();
     let (self_agreement, between, kappa) = agreement(db)?;
     let defects = defects(db)?;
@@ -329,114 +311,69 @@ fn support(judgments: &[Judgment], metric: usize) -> Support {
     }
 }
 
-type Pair = ((String, i64, i64), (String, i64, i64));
-/// A stored judgment: rater, n, a (blob, start, end), b (blob, start, end), choice,
-/// repeat_of.
-type Row = (
-    String,
-    i64,
-    String,
-    i64,
-    i64,
-    String,
-    i64,
-    i64,
-    String,
-    Option<i64>,
-);
+/// Each judgment with its pair in a canonical order (`lo`, `hi`: functions as
+/// {blob, start, end}) and the function chosen (NULL: can't tell); then first
+/// judgments only, each rater's first of a pair, with its category for kappa: 0 the
+/// pair's first function, 1 its second, 2 can't tell.
+const JUDGMENTS: &str = "
+with j as (
+  select rater, n, repeat_of,
+         least(a, b) as lo, greatest(a, b) as hi,
+         case choice when 'a' then a when 'b' then b end as chosen
+  from (select *, {'blob': a_blob, 'start': a_start, 'end': a_end} as a,
+                  {'blob': b_blob, 'start': b_start, 'end': b_end} as b from labels)),
+first as (
+  select *, case when chosen = lo then 0 when chosen is not null then 1 else 2 end as k
+  from j where repeat_of is null
+  qualify row_number() over (partition by rater, lo, hi order by n) = 1)";
 
 /// Self-agreement per rater on repeated pairs, and agreement between raters on
 /// pairs several judged, with Cohen's kappa over the pooled rater pairs.
 fn agreement(db: &Connection) -> Result<(Vec<Agreement>, Option<Agreement>, Option<f64>)> {
-    // Each judgment as (rater, n, pair key, the chosen function or None for same).
-    let rows: Vec<Row> = db
-        .prepare(
-            "select rater, n, a_blob, a_start, a_end, b_blob, b_start, b_end, choice, repeat_of
-             from labels order by rater, n",
-        )?
+    // A repeat agrees when it chose what the judgment it repeats chose.
+    let mut self_agreement: Vec<Agreement> = db
+        .prepare(&format!(
+            "{JUDGMENTS}
+             select l.rater, count(*) filter (e.chosen is not distinct from l.chosen), count(*)
+             from j l left join j e on e.rater = l.rater and e.n = l.repeat_of
+             where l.repeat_of is not null group by l.rater"
+        ))?
         .query_map([], |r| {
-            Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-                r.get(7)?,
-                r.get(8)?,
-                r.get(9)?,
-            ))
+            Ok(Agreement {
+                who: r.get(0)?,
+                agree: r.get(1)?,
+                of: r.get(2)?,
+            })
         })?
         .collect::<Result<_, _>>()?;
-    type Fn = (String, i64, i64);
-    let judged = |r: &Row| -> (Pair, Option<Fn>) {
-        let a: Fn = (r.2.clone(), r.3, r.4);
-        let b: Fn = (r.5.clone(), r.6, r.7);
-        let chosen = match r.8.as_str() {
-            "a" => Some(a.clone()),
-            "b" => Some(b.clone()),
-            _ => None,
-        };
-        let pair = if a < b { (a, b) } else { (b, a) };
-        (pair, chosen)
-    };
-    let mut by_rater: HashMap<(String, i64), Option<Fn>> = HashMap::new();
-    let mut self_counts: HashMap<String, (usize, usize)> = HashMap::new();
-    let mut first: HashMap<(String, Pair), Option<Fn>> = HashMap::new();
-    for r in &rows {
-        let (pair, chosen) = judged(r);
-        by_rater.insert((r.0.clone(), r.1), chosen.clone());
-        if let Some(earlier) = r.9 {
-            let e = by_rater.get(&(r.0.clone(), earlier)).cloned().flatten();
-            let entry = self_counts.entry(r.0.clone()).or_default();
-            entry.1 += 1;
-            entry.0 += usize::from(e == chosen);
-        } else {
-            first.entry((r.0.clone(), pair)).or_insert(chosen);
-        }
-    }
-    let mut self_agreement: Vec<Agreement> = self_counts
-        .into_iter()
-        .map(|(who, (agree, of))| Agreement { who, agree, of })
-        .collect();
     self_agreement.sort_by(|a, b| a.who.cmp(&b.who));
-    // Between raters: every two raters' first judgments of the same pair.
-    let mut by_pair: HashMap<Pair, Vec<Option<Fn>>> = HashMap::new();
-    for ((_, pair), chosen) in first {
-        by_pair.entry(pair).or_default().push(chosen);
-    }
-    let (mut agree, mut of) = (0, 0);
-    // Kappa over categories: first function of the pair, second, same.
-    let mut table = [[0f64; 3]; 3];
-    for (pair, choices) in &by_pair {
-        let cat = |c: &Option<Fn>| match c {
-            Some(f) if *f == pair.0 => 0,
-            Some(_) => 1,
-            None => 2,
-        };
-        for i in 0..choices.len() {
-            for j in i + 1..choices.len() {
-                of += 1;
-                agree += usize::from(choices[i] == choices[j]);
-                table[cat(&choices[i])][cat(&choices[j])] += 0.5;
-                table[cat(&choices[j])][cat(&choices[i])] += 0.5;
-            }
-        }
-    }
+    // Between raters: every two raters' first judgments of the same pair, and how
+    // often each category occurs among them.
+    let (of, agree, marginals): (usize, usize, [usize; 3]) = db.query_row(
+        &format!(
+            "{JUDGMENTS}
+             select count(*), count(*) filter (a.k = b.k),
+                    count(*) filter (a.k = 0) + count(*) filter (b.k = 0),
+                    count(*) filter (a.k = 1) + count(*) filter (b.k = 1),
+                    count(*) filter (a.k = 2) + count(*) filter (b.k = 2)
+             from first a join first b on a.lo = b.lo and a.hi = b.hi and a.rater < b.rater"
+        ),
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, [r.get(2)?, r.get(3)?, r.get(4)?])),
+    )?;
     let between = (of > 0).then(|| Agreement {
         who: "between raters".into(),
         agree,
         of,
     });
+    // Kappa over the three categories; each category's share of all choices is
+    // its marginal over both sides of the rater pairs.
     let kappa = (of > 0).then(|| {
         let n = of as f64;
-        let po = (0..3).map(|k| table[k][k]).sum::<f64>() / n;
-        let pe = (0..3)
-            .map(|k| {
-                let row: f64 = table[k].iter().sum();
-                (row / n) * (row / n)
-            })
+        let po = agree as f64 / n;
+        let pe = marginals
+            .iter()
+            .map(|&m| (0.5 * m as f64 / n) * (0.5 * m as f64 / n))
             .sum::<f64>();
         if pe < 1.0 {
             (po - pe) / (1.0 - pe)
