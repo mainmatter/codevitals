@@ -189,16 +189,16 @@ fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Resul
 
 /// A commit's change to one path.
 #[derive(Default)]
-struct Row {
+pub struct Row {
     /// The new blob, `None` when the file is gone.
-    blob: Option<String>,
+    pub blob: Option<String>,
     /// The path the file was renamed from.
-    source: Option<String>,
+    pub source: Option<String>,
     /// The blob the change replaces, to count lines against.
     old: Option<String>,
     /// Lines added and deleted; `None` for a file codevitals does not parse (see
     /// `parse::parseable`), and for the deletion a rename implies.
-    lines: Option<(i32, i32)>,
+    pub lines: Option<(i32, i32)>,
 }
 
 /// A commit's changes against its first parent (the root's against the empty tree):
@@ -211,6 +211,15 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
         Some(p) => repo.find_commit(p)?.tree()?,
         None => repo.empty_tree(),
     };
+    diff_trees(repo, &prev, &commit.tree()?)
+}
+
+/// The changes from tree `prev` to `tree`, as `diff` describes them.
+pub fn diff_trees(
+    repo: &gix::Repository,
+    prev: &gix::Tree,
+    tree: &gix::Tree,
+) -> Result<BTreeMap<String, Row>> {
     let mut rows = BTreeMap::new();
     let mut insert = |path: String, row: Row| {
         ensure!(
@@ -222,7 +231,7 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
     };
     let mut options = gix::diff::Options::default();
     options.track_rewrites(Some(gix::diff::Rewrites::default()));
-    for c in repo.diff_tree_to_tree(&prev, &commit.tree()?, options)? {
+    for c in repo.diff_tree_to_tree(prev, tree, options)? {
         let (old, new) = match c {
             Change::Addition { .. } => (None, file(c.entry_mode_and_id())),
             Change::Deletion { .. } => (file(c.entry_mode_and_id()), None),
@@ -314,7 +323,7 @@ fn line_changes(old: &[u8], new: &[u8]) -> (i32, i32) {
 
 /// A path as text: as is when it is UTF-8, else with each byte of an invalid
 /// sequence written `\xNN`, so distinct paths stay distinct.
-fn path_text(path: &[u8]) -> String {
+pub fn path_text(path: &[u8]) -> String {
     path.utf8_chunks().fold(String::new(), |mut text, chunk| {
         text.push_str(chunk.valid());
         for b in chunk.invalid() {

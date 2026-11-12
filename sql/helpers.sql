@@ -255,6 +255,16 @@ innermost as (
   where s.kind in ('branch', 'condition', 'throw', 'goto')
   qualify row_number() over (partition by s.blob, s.test_features, s.kind, s.start_byte, s.end_byte
                              order by f.start_byte desc, f.end_byte) = 1),
+inner_sums as (
+  select blob, test_features, start_byte, end_byte, sum(inner_tokens) as inner_tokens
+  from (select o.blob, o.test_features, o.start_byte, o.end_byte, i.tokens as inner_tokens
+        from fns i join fns o
+          on o.blob = i.blob and o.test_features = i.test_features
+         and o.start_byte <= i.start_byte and i.end_byte <= o.end_byte
+         and (o.start_byte, o.end_byte) <> (i.start_byte, i.end_byte)
+        qualify row_number() over (partition by i.blob, i.test_features, i.start_byte, i.end_byte
+                                   order by o.start_byte desc, o.end_byte) = 1)
+  group by all),
 counts as (
   select blob, test_features, start_byte, end_byte,
          count(*) filter (kind in ('branch', 'condition')) as decisions,
@@ -270,7 +280,7 @@ nesting as (
 select f.blob, f.test_features, f.lang, f.start_byte, f.end_byte, f.line, f.end_line, f.name,
        concat_ws('::', q.outer_names, f.name) as qualified,
        row_number() over (partition by f.blob, f.test_features, qualified order by f.start_byte) as ordinal,
-       f.tokens, f.params, f.hash,
+       f.tokens, f.tokens - coalesce(i.inner_tokens, 0) as own_tokens, f.params, f.hash,
        -- Syntactic visibility: pub/export markers, C/C++ not static, Python no `_`.
        case when f.lang in ('c', 'cpp')
               then (f.blob, f.start_byte, f.end_byte) not in (select blob, start_byte, end_byte from spans where kind = 'static')
@@ -281,7 +291,8 @@ select f.blob, f.test_features, f.lang, f.start_byte, f.end_byte, f.line, f.end_
        coalesce(c.gotos, 0) as gotos
 from fns f join nesting n using (blob, test_features, start_byte, end_byte)
 left join qualified q using (blob, test_features, start_byte, end_byte)
-left join counts c using (blob, test_features, start_byte, end_byte);
+left join counts c using (blob, test_features, start_byte, end_byte)
+left join inner_sums i using (blob, test_features, start_byte, end_byte);
 
 -- Additive structure facts per blob and declared test features, production code only
 -- (code_spans), with the function facts summed.

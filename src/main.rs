@@ -16,6 +16,7 @@ use crate::db::open;
 
 mod attributes;
 mod db;
+mod diff;
 mod graph;
 mod metrics;
 mod parse;
@@ -49,6 +50,26 @@ enum Cli {
         /// Metrics to compute; all of them when omitted.
         #[arg(value_name = "METRIC")]
         names: Vec<String>,
+    },
+    /// Report how each metric changes from BASE to HEAD, and the functions and files
+    /// that account for the change, largest contribution first. Needs no scan: blobs
+    /// the database lacks are parsed (with a scan that reached BASE, only those that
+    /// differ). Windowed metrics (changes, entropy, ownership) and dependency metrics
+    /// need history and are not reported.
+    Diff {
+        base: String,
+        head: String,
+        /// Repository to read the commits from.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Scanned database to take parsed blobs from, if it exists.
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Contributions listed per metric, for functions and for files.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        #[arg(long, value_enum, default_value_t = diff::Format::Json)]
+        format: diff::Format,
     },
     /// Export the production files and functions at one scanned commit, with the
     /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
@@ -117,6 +138,21 @@ fn main() -> Result<()> {
             let json = metrics::export(&mut db, &names)?;
             write(&output, json)?;
             info!(?output, "metrics written");
+        }
+        Cli::Diff {
+            base,
+            head,
+            repo,
+            db,
+            top,
+            format,
+        } => {
+            let repo = gix::discover(&repo)
+                .with_context(|| format!("open the git repository containing {repo:?}"))?;
+            print!("{}", diff::diff(&repo, &db, &base, &head, top, format)?);
+            if matches!(format, diff::Format::Json) {
+                println!();
+            }
         }
         Cli::Units {
             db: path,

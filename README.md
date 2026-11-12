@@ -17,7 +17,20 @@ cv scan                    # record history into codevitals.duckdb; rerun to add
 cv metrics metrics.json    # compute every metric into one JSON file
 cv metrics --help          # list the metrics
 cv units units.json        # the production files and functions behind them, at the newest commit
+cv diff main~10 main       # each metric's change over a range, and the functions and files behind it
 ```
+
+`cv diff` needs no scan: it parses the blobs the database lacks (with a scan that
+reached BASE, only those that differ) and reports the metrics of one commit's code
+(size, structure, complexity, non-local), as JSON or, with `--format text`, as:
+
+```
+nesting        1.1860 -> 1.2080 (+1.9%)  unvalidated
+     +0.3%  crates/ignore/src/incremental.rs  parent_key
+     +0.7%  crates/ignore/src/pathutil.rs (file)
+```
+
+Each contribution is a share of BASE's value, and contributions add up to the change.
 
 To look at the result, import `grafana/dashboards/codevitals.json` into Grafana with
 the Infinity data source and point its Metrics URL at the file, or run
