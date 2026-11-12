@@ -262,11 +262,7 @@ Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat
 Trend: rising means more conditions to keep in mind while reading. An average over all function code: read function_nesting first. Unvalidated.';
 
 create or replace view metrics.global_state as
-select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value, sum(global_state) as count,
-       map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(global_state, tokens, lang, 'c') as c, 1000 * family_ratio(global_state, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(global_state, tokens, lang, 'python') as python, 1000 * family_ratio(global_state, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('global_state');
 
 comment on view metrics.global_state is 'NONLOCAL: Global mutable state per 1,000 tokens
 
@@ -277,11 +273,7 @@ Read: the forms differ: compare each language over time, not languages with each
 Trend: rising means behaviour depends on more state outside the code in view. Read the count beside the density: adding plain code lowers the density without removing any state.';
 
 create or replace view metrics.exceptions as
-select seq, 1000 * sum(throws) / nullif(sum(tokens), 0) as value, sum(throws) as count,
-       map(list(lang order by lang), list(1000 * throws / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(throws, tokens, lang, 'c') as c, 1000 * family_ratio(throws, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(throws, tokens, lang, 'python') as python, 1000 * family_ratio(throws, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('throws');
 
 comment on view metrics.exceptions is 'NONLOCAL: Throws and panics per 1,000 tokens
 
@@ -292,11 +284,7 @@ Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must h
 Trend: rising means control leaves functions in more places a caller cannot see. Read the count beside the density. Unvalidated.';
 
 create or replace view metrics.invariants as
-select seq, 1000 * sum(invariants) / nullif(sum(tokens), 0) as value, sum(invariants) as count,
-       map(list(lang order by lang), list(1000 * invariants / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(invariants, tokens, lang, 'c') as c, 1000 * family_ratio(invariants, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(invariants, tokens, lang, 'python') as python, 1000 * family_ratio(invariants, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('invariants');
 
 comment on view metrics.invariants is 'NONLOCAL: Stated invariants per 1,000 tokens
 
@@ -307,11 +295,7 @@ Read: an invariant written down is checked where it is assumed. More is not wors
 Trend: falling while the code grows means fewer assumptions are stated. Unvalidated.';
 
 create or replace view metrics.unhandled as
-select seq, 1000 * sum(unhandled) / nullif(sum(tokens), 0) as value, sum(unhandled) as count,
-       map(list(lang order by lang), list(1000 * unhandled / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(unhandled, tokens, lang, 'c') as c, 1000 * family_ratio(unhandled, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(unhandled, tokens, lang, 'python') as python, 1000 * family_ratio(unhandled, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('unhandled');
 
 comment on view metrics.unhandled is 'NONLOCAL: Fallible operations left unhandled per 1,000 tokens
 
@@ -322,11 +306,7 @@ Read: each one panics instead of handling a failure. Syntax cannot tell an unwra
 Trend: rising means more failures turned into panics instead of handled. Unvalidated.';
 
 create or replace view metrics.unfinished as
-select seq, 1000 * sum(unfinished) / nullif(sum(tokens), 0) as value, sum(unfinished) as count,
-       map(list(lang order by lang), list(1000 * unfinished / nullif(tokens, 0) order by lang)) as by_language,
-       1000 * family_ratio(unfinished, tokens, lang, 'c') as c, 1000 * family_ratio(unfinished, tokens, lang, 'rust') as rust,
-       1000 * family_ratio(unfinished, tokens, lang, 'python') as python, 1000 * family_ratio(unfinished, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
+select * from per_kilotoken('unfinished');
 
 comment on view metrics.unfinished is 'NONLOCAL: Unfinished code per 1,000 tokens
 

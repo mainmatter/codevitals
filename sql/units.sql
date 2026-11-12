@@ -4,10 +4,8 @@
 
 -- Production files: blob_facts per version, with the file's lineage (renames keep it).
 create or replace view units.files as
-select v.path, l.lineage, v.blob, v.since, v.until, f.* exclude (blob, test_features)
-from versions v join path_roles r on r.path = v.path and r.role = 'code'
-join blob_facts f using (blob, test_features)
-join (select distinct seq, path, lineage from lineages) l on l.path = v.path and l.seq = v.since;
+select v.path, v.lineage, v.blob, v.since, v.until, f.* exclude (blob, test_features)
+from code_versions v join blob_facts f using (blob, test_features);
 
 comment on view units.files is 'Production files at each version [since, until): path, lineage (a stable id across renames), blob, and the facts the metrics sum (tokens, decisions, throws, gotos, global_state, fn_tokens, nested_tokens, deep_tokens, private_tokens, large_tokens).';
 
@@ -16,12 +14,10 @@ comment on view units.files is 'Production files at each version [since, until):
 -- several of that name (`#2`, ...). A renamed function, or one moved to another
 -- file, gets a new identity.
 create or replace view units.functions as
-select v.path, l.lineage,
-       l.lineage || ' ' || f.qualified || if(f.ordinal > 1, '#' || f.ordinal, '') as function,
+select v.path, v.lineage,
+       v.lineage || ' ' || f.qualified || if(f.ordinal > 1, '#' || f.ordinal, '') as function,
        v.blob, v.since, v.until, f.* exclude (blob, test_features)
-from versions v join path_roles r on r.path = v.path and r.role = 'code'
-join function_facts f using (blob, test_features)
-join (select distinct seq, path, lineage from lineages) l on l.path = v.path and l.seq = v.since;
+from code_versions v join function_facts f using (blob, test_features);
 
 comment on view units.functions is 'Production functions at each version [since, until) of their file: function (lineage, qualified name and ordinal: an identity across versions), name, qualified, line, end_line, tokens, params, public, nesting (deepest block below the body), decisions, throws and gotos (in this function, not in functions inside it).';
 
@@ -109,12 +105,9 @@ comment on view units.orphaning is 'Per weekly window point (seq) and live produ
 -- not count).
 create or replace view units.touches as
 with t as (
-  select x.seq, x.lineage, x.path
-  from code_changes x
-  where x.blob is not null
-    and x.blob is distinct from (select l.blob from lineages l where l.lineage = x.lineage and l.seq < x.seq
-                                 order by l.seq desc limit 1)
-    and exists (select 1 from lineages l where l.lineage = x.lineage and l.seq < x.seq and l.blob is not null)),
+  select seq, lineage, path from (
+    select *, lag(blob) over (partition by lineage order by seq) as previous from code_changes)
+  where blob is not null and previous is not null and blob <> previous),
 raised as (
   select distinct c.since as seq, c.lineage
   from units.functions c join units.functions p on p.function = c.function and p.until = c.since

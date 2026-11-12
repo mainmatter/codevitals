@@ -3,18 +3,18 @@
 -- and the labels of `cv validate` decide which graduate to `metrics`. Each comment
 -- has the metrics' format.
 
--- Points where the experimental snapshot metrics are read: each week's last commit,
--- the window ends and the tip (reach_points).
+-- Production file versions live at each point of reach_points (each week's last
+-- commit, the window ends, the tip): the snapshots the metrics below read.
+create or replace view experimental_live as
+select p.seq, v.path, v.blob, v.test_features
+from reach_points p join code_versions v on v.since <= p.seq and p.seq < v.until;
 
 -- Duplicated runs of production tokens. A fingerprint (extract.rs) that occurs twice
 -- is a repeated run of 50 tokens, names and literals ignored; every repeated run of
 -- 60 or more has one. The bytes of duplicated fingerprints, merged per file and
 -- converted to tokens at the file's tokens per byte, approximate the duplicated tokens.
 create or replace view experimental.clones as
-with live as (
-  select p.seq, v.path, v.blob, v.test_features
-  from reach_points p join versions v on v.since <= p.seq and p.seq < v.until
-  join path_roles r on r.path = v.path and r.role = 'code'),
+with live as (select * from experimental_live),
 fps as (
   select l.seq, l.path, s.hash, s.start_byte, s.end_byte
   from live l join code_spans s on s.blob = l.blob and s.test_features = l.test_features
@@ -52,12 +52,6 @@ Read: 0.08 means 8% of the code repeats elsewhere. Approximate: runs are found b
 
 Trend: rising means copy-paste. Cloning was among the strongest predictors of expert maintainability ratings in Schnappinger et al. (ICPC 2019, three Java systems); on their later public dataset class and method size predicted best. Unvalidated.';
 
--- Production file versions live at each point of reach_points (weekly), the
--- snapshots the experimental metrics below read.
-create or replace view experimental_live as
-select p.seq, v.path, v.blob, v.test_features
-from reach_points p join versions v on v.since <= p.seq and p.seq < v.until
-join path_roles r on r.path = v.path and r.role = 'code';
 
 -- Production functions at each point, with the extras extract.rs adds per function.
 create or replace view experimental_functions as
@@ -187,8 +181,7 @@ fan_in as (
   from bounds b join import_edges e on e.since <= b.win and b.first < e.until group by all),
 changed as (select distinct w.win, x.path from windows w join code_changes x using (seq)),
 live as (
-  select b.win, v.path from bounds b join versions v on v.since <= b.win and b.win < v.until
-  join path_roles r on r.path = v.path and r.role = 'code')
+  select b.win, v.path from bounds b join code_versions v on v.since <= b.win and b.win < v.until)
 select l.win as seq, avg((f.now > f.before and c.path is null)::int) as value,
        count(*) filter (f.now > f.before and c.path is null) as count, count(*) as files
 from live l left join fan_in f on f.win = l.win and f.path = l.path
@@ -206,7 +199,6 @@ Trend: rising means growing reliance on code that is not touched. Unvalidated.';
 create or replace view experimental.routing_around as
 with bounds as (select win, min(seq) as first from windows group by win),
 born as (select lineage, min(seq) as seq from code_changes group by lineage),
-last_change as (select path, seq from code_changes where blob is not null),
 new_files as (
   select b.win, f.path, f.tokens
   from bounds b join born n on n.seq between b.first and b.win
@@ -233,18 +225,18 @@ Trend: rising means more code routed around instead of through. Unvalidated.';
 
 create or replace view experimental.risk_per_touch as
 with touches as (
-  select w.win, x.seq, x.lineage, c.time
-  from windows w join code_changes x using (seq) join commit_times c using (seq)
+  select x.seq, x.lineage, c.time
+  from code_changes x join commit_times c using (seq)
   where x.blob is not null and x.seq in (select seq from change_weights)),
 fixes as (
   select x.lineage, x.seq, c.time
   from code_changes x join commit_info i using (seq) join commit_times c using (seq)
   where i.is_fix and x.blob is not null),
-followed as (
-  select t.win, t.seq, t.lineage,
-         exists (select 1 from fixes f where f.lineage = t.lineage and f.seq > t.seq
-                 and f.time <= t.time + to_days(fix_days())) as fixed
-  from touches t),
+-- Each touch once, with the next fix to its file (times never fall back).
+fixed as (
+  select t.seq, t.lineage, coalesce(f.time <= t.time + to_days(fix_days()), false) as fixed
+  from touches t asof left join fixes f on f.lineage = t.lineage and f.seq > t.seq),
+followed as (select w.win, f.* from windows w join fixed f using (seq)),
 horizon as (select max(time) as last from commit_times)
 select f.win as seq, avg(f.fixed::int) as value, count(*) filter (f.fixed) as count, count(*) as touches,
        max(c.time) + to_days(fix_days()) > any_value(h.last) as incomplete

@@ -226,6 +226,13 @@ from lineages x join path_roles r using (path)
 where r.role = 'code'
   and not (x.blob is null and (x.seq, x.path) in (select seq, source from changes where source is not null));
 
+-- Production file versions [since, until), with their lineage: what every
+-- per-version fact of production code joins.
+create or replace view code_versions as
+select v.path, l.lineage, v.blob, v.test_features, v.since, v.until
+from versions v join path_roles r on r.path = v.path and r.role = 'code'
+join lineages l on l.path = v.path and l.seq = v.since;
+
 -- How many commits each author identity made to each file lineage: a rater's
 -- familiarity with the functions shown to them (labels).
 create or replace view author_file_commits as
@@ -387,8 +394,7 @@ join paths pb on pb.win = p.win and pb.lineage = p.lb and pb.blob is not null;
 create or replace view code_totals as
 with v as (
   select v.since, v.until, f.* exclude (blob, test_features)
-  from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join blob_facts f using (blob, test_features)),
+  from code_versions v join blob_facts f using (blob, test_features)),
 deltas as (
   select seq, lang, sum(columns(* exclude (seq, lang))) from (
     select since as seq, lang, columns(* exclude (since, until, lang)) from v
@@ -403,6 +409,19 @@ select g.seq, g.lang, r.* exclude (seq, lang)
 from grid g asof join running r on g.lang = r.lang and g.seq >= r.seq
 where r.files > 0;
 
+-- A count of code_totals (global_state, throws, invariants, unhandled, unfinished)
+-- per 1,000 production tokens at each commit (value), the count itself, and the
+-- same per language and family.
+create or replace macro per_kilotoken(which) as table
+select seq, 1000 * sum(n) / nullif(sum(tokens), 0) as value, sum(n) as count,
+       map(list(lang order by lang), list(1000 * n / nullif(tokens, 0) order by lang)) as by_language,
+       1000 * family_ratio(n, tokens, lang, 'c') as c, 1000 * family_ratio(n, tokens, lang, 'rust') as rust,
+       1000 * family_ratio(n, tokens, lang, 'python') as python, 1000 * family_ratio(n, tokens, lang, 'ecma') as ecma
+from (select seq, lang, tokens, n from code_totals
+      unpivot (n for measure in (global_state, throws, invariants, unhandled, unfinished))
+      where measure = which)
+group by seq;
+
 -- Per-function measures over production code at every commit, as histograms built
 -- from change points: for each measure (decisions, nesting, params) and value, the
 -- functions with that value and their tokens. Commits times values, not commits
@@ -410,8 +429,7 @@ where r.files > 0;
 create or replace view function_histograms as
 with f as (
   select v.since, v.until, x.tokens, x.decisions, x.nesting, x.params
-  from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join function_facts x using (blob, test_features)),
+  from code_versions v join function_facts x using (blob, test_features)),
 m as (
   select since, until, tokens, measure, value from f
   unpivot (value for measure in (decisions, nesting, params))
@@ -454,15 +472,17 @@ with production as (
   select seq, count(*) as files from code_changes group by seq),
 c as (
   select c.*, a.name || ' <' || a.email || '>' as author, a.is_bot,
-         split_part(c.message, chr(10), 1) as subject, coalesce(p.files, 0) as production_files
+         split_part(c.message, chr(10), 1) as subject, coalesce(p.files, 0) as production_files,
+         regexp_matches(split_part(c.message, chr(10), 1), '(?i)\b(fix|fixes|fixed|bug|hotfix|regression|revert)')
+           as is_fix_keyword
   from commits c join authors a using (seq) left join production p using (seq))
 select seq, id, time, author, message, subject, production_files,
-  (regexp_matches(subject, '(?i)\b(fix|fixes|fixed|bug|hotfix|regression|revert)')
+  (is_fix_keyword
      or regexp_matches(subject, '(?i)(crash|leak|race\b|deadlock|hang|segfault|overflow|corrupt|wrong|incorrect|asan|use.after.free|double.free|null.pointer|panic)'))
     and production_files > 0
     and not regexp_matches(subject, '(?i)(test|flak|\bci\b|lint|typo|\bdocs?\b|readme|cmake|\bbuild\b|review|indent|format|chore|contributing|\blink)')
     as is_fix,
-  regexp_matches(subject, '(?i)\b(fix|fixes|fixed|bug|hotfix|regression|revert)') as is_fix_keyword,
+  is_fix_keyword,
   regexp_matches(message, '(?i)co-authored-by:.*(claude|copilot|cursor|codex|devin|aider)') as is_agent,
   is_bot
 from c;
