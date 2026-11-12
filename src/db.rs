@@ -9,7 +9,7 @@ use gix::ObjectId;
 /// Extractor version. Bump whenever `extract` output could change for any input.
 pub const V: i32 = 9;
 /// Database layout version. Bump whenever a table changes; older databases are refused.
-pub const SCHEMA: i32 = 7;
+pub const SCHEMA: i32 = 8;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its
 /// size, so batching dominates throughput; an interrupt loses at most one batch.
 pub const BATCH: usize = 500;
@@ -17,6 +17,35 @@ pub const BATCH: usize = 500;
 /// them a query fails instead of exhausting the machine's memory or disk.
 const MEMORY_LIMIT: &str = "4GB";
 const SPILL_LIMIT: &str = "4GB";
+
+/// The repository a database was scanned from (its git directory), opened, unless
+/// `over` names another; either way it must hold the newest scanned commit, whose
+/// blobs the database describes.
+pub fn scanned_repo(db: &Connection, over: Option<&Path>) -> Result<gix::Repository> {
+    let recorded: Option<String> = db
+        .query_row("select repo from codevitals", [], |r| r.get(0))
+        .optional()?
+        .flatten();
+    let path = match (over, &recorded) {
+        (Some(path), _) => path.to_path_buf(),
+        (None, Some(recorded)) => recorded.into(),
+        (None, None) => {
+            anyhow::bail!("the database does not record the repository it scanned; pass --repo")
+        }
+    };
+    let repo = gix::discover(&path).with_context(|| {
+        format!("open the git repository {path:?}, which the database was scanned from; pass --repo if it moved")
+    })?;
+    let (_, tip) = tip(db)?;
+    ensure!(
+        repo.find_commit(oid(&tip)).is_ok(),
+        "{:?} does not contain the newest scanned commit {tip}: the database was scanned from {}; \
+         pass that repository with --repo, or rescan",
+        repo.git_dir(),
+        recorded.as_deref().unwrap_or("an unrecorded repository")
+    );
+    Ok(repo)
+}
 
 /// The newest scanned commit: its seq and id.
 pub fn tip(db: &Connection) -> Result<(i32, String)> {

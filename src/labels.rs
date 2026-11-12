@@ -76,6 +76,22 @@ pub fn load(db: &Connection, file: &Path) -> Result<usize> {
         bad == 0,
         "{file:?}: {bad} labels have a choice other than a, b or same"
     );
+    // Every field but repeat_of is required: readers rely on it.
+    let missing: i64 = db.query_row(
+        &format!(
+            "select count(*) from {table}
+             where rater is null or n is null or time is null or a_blob is null or a_start is null
+                or a_end is null or a_path is null or b_blob is null or b_start is null
+                or b_end is null or b_path is null or ms is null or a_commits is null
+                or b_commits is null"
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(
+        missing == 0,
+        "{file:?}: {missing} labels lack a field (every field but repeat_of is required)"
+    );
     Ok(loaded)
 }
 

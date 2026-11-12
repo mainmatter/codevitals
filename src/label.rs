@@ -253,13 +253,24 @@ pub fn run(repo: &gix::Repository, db: &mut Connection, file: &Path) -> Result<u
             let pair = session.next()?;
             let (a, b) = (&session.candidates[pair.a], &session.candidates[pair.b]);
             let text = |c: &Candidate| -> Result<String> {
-                let data = repo.find_blob(crate::db::oid(&c.blob))?.take_data();
+                let data = repo
+                    .find_blob(crate::db::oid(&c.blob))
+                    .with_context(|| {
+                        format!(
+                            "read {} (blob {}) from {:?}",
+                            c.path,
+                            c.blob,
+                            repo.git_dir()
+                        )
+                    })?
+                    .take_data();
                 Ok(String::from_utf8_lossy(&data[c.start as usize..c.end as usize]).into_owned())
             };
             let shown = Instant::now();
-            let choice = match screen.ask(a, &text(a)?, b, &text(b)?, session.judged.len())? {
-                Some(choice) => choice,
-                None => return Ok(()),
+            let (a_text, b_text) = (text(a)?, text(b)?);
+            let choice = match screen.ask([(a, &a_text), (b, &b_text)], session.judged.len())? {
+                Answer::Choice(choice) => choice,
+                Answer::Quit => return Ok(()),
             };
             let label = Label {
                 rater: rater.clone(),
@@ -354,119 +365,134 @@ impl Screen {
         Ok(())
     }
 
-    /// Shows the pair and returns the choice: `a` (left), `b` (right), `same`, or
-    /// `None` to quit.
-    fn ask(
-        &mut self,
-        a: &Candidate,
-        a_text: &str,
-        b: &Candidate,
-        b_text: &str,
-        n: usize,
-    ) -> Result<Option<&'static str>> {
+    /// Shows the pair and returns the rater's answer.
+    fn ask(&mut self, pair: [(&Candidate, &str); 2], n: usize) -> Result<Answer> {
         if !self.interactive {
             let mut byte = [0u8];
             loop {
                 if std::io::stdin().read(&mut byte)? == 0 {
-                    return Ok(None);
+                    return Ok(Answer::Quit);
                 }
-                match byte[0] {
-                    b'h' | b'a' => return Ok(Some("a")),
-                    b'l' | b'b' => return Ok(Some("b")),
-                    b's' => return Ok(Some("same")),
-                    b'q' => return Ok(None),
-                    _ => {}
+                if let Some(answer) = byte_answer(byte[0]) {
+                    return Ok(answer);
                 }
             }
         }
-        self.draw(a, a_text, b, b_text, n)?;
+        self.draw(pair, n)?;
         loop {
             match crossterm::event::read()? {
-                Event::Key(KeyEvent {
-                    code,
-                    modifiers,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => match code {
-                    KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('a') => {
-                        return Ok(Some("a"));
+                Event::Key(key) => {
+                    if let Some(answer) = key_answer(key) {
+                        return Ok(answer);
                     }
-                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('b') => {
-                        return Ok(Some("b"));
-                    }
-                    KeyCode::Down | KeyCode::Char(' ') | KeyCode::Char('s') => {
-                        return Ok(Some("same"));
-                    }
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(None);
-                    }
-                    _ => {}
-                },
-                Event::Resize(..) => self.draw(a, a_text, b, b_text, n)?,
+                }
+                Event::Resize(..) => self.draw(pair, n)?,
                 _ => {}
             }
         }
     }
 
-    fn draw(
-        &mut self,
-        a: &Candidate,
-        a_text: &str,
-        b: &Candidate,
-        b_text: &str,
-        n: usize,
-    ) -> Result<()> {
+    fn draw(&mut self, pair: [(&Candidate, &str); 2], n: usize) -> Result<()> {
         let (width, height) = terminal::size()?;
-        let (width, height) = (width as usize, height as usize);
-        let pane = width.saturating_sub(3) / 2;
-        let rows = height.saturating_sub(4);
-        let lines = |c: &Candidate, text: &str| -> Vec<String> {
-            let mut out = vec![format!("{}:{}", c.path, c.line)];
-            out.push(String::new());
-            out.extend(text.lines().map(|l| l.replace('\t', "    ")));
-            if out.len() > rows {
-                out.truncate(rows.saturating_sub(1));
-                out.push("...".into());
-            }
-            out.into_iter().map(|l| fit(&l, pane)).collect()
-        };
-        let (left, right) = (lines(a, a_text), lines(b, b_text));
+        let lines = layout(width.into(), height.into(), pair, n);
         let mut out = std::io::stdout();
-        queue!(
-            out,
-            terminal::Clear(terminal::ClearType::All),
-            cursor::MoveTo(0, 0)
-        )?;
-        queue!(
-            out,
-            style::Print(fit("Which would you rather have to change?", width)),
-            cursor::MoveToNextLine(2)
-        )?;
-        for i in 0..rows {
-            let l = left.get(i).map_or("", String::as_str);
-            let r = right.get(i).map_or("", String::as_str);
-            queue!(
-                out,
-                style::Print(format!("{l:<pane$} | {r}")),
-                cursor::MoveToNextLine(1)
-            )?;
+        queue!(out, terminal::Clear(terminal::ClearType::All))?;
+        for (row, line) in lines.iter().enumerate() {
+            queue!(out, cursor::MoveTo(0, row as u16), style::Print(line))?;
         }
-        let keys = format!("<- left    -> right    down: can't tell    q: quit    ({n} judged)");
-        queue!(
-            out,
-            cursor::MoveTo(0, height.saturating_sub(1) as u16),
-            style::Print(fit(&keys, width))
-        )?;
         out.flush()?;
         Ok(())
     }
 }
 
-/// `text` cut or padded to `width` characters.
+/// What the rater answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answer {
+    /// `a` (left), `b` (right) or `same` (can't tell).
+    Choice(&'static str),
+    Quit,
+}
+
+/// The answer a key press gives: arrows or h/l/a/b for a side, down, space or s for
+/// can't tell, q, Esc or Ctrl-C to quit; other keys, and releases, none.
+fn key_answer(key: KeyEvent) -> Option<Answer> {
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Left | KeyCode::Char('h' | 'a') => Answer::Choice("a"),
+        KeyCode::Right | KeyCode::Char('l' | 'b') => Answer::Choice("b"),
+        KeyCode::Down | KeyCode::Char(' ' | 's') => Answer::Choice("same"),
+        KeyCode::Char('q') | KeyCode::Esc => Answer::Quit,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Answer::Quit,
+        _ => return None,
+    })
+}
+
+/// The answer a byte of scripted input gives (h, a, l, b, s, q), as `key_answer`.
+fn byte_answer(byte: u8) -> Option<Answer> {
+    Some(match byte {
+        b'h' | b'a' => Answer::Choice("a"),
+        b'l' | b'b' => Answer::Choice("b"),
+        b's' => Answer::Choice("same"),
+        b'q' => Answer::Quit,
+        _ => return None,
+    })
+}
+
+/// The screen for a pair, one string per row, each exactly `width` columns wide:
+/// the question, a blank row, both functions side by side (path and line, a blank
+/// row, the code, cut to fit), and the keys on the last row. Tabs become four
+/// spaces; other control characters (a CRLF file's carriage returns) are dropped, as
+/// a terminal would act on them.
+fn layout(width: usize, height: usize, pair: [(&Candidate, &str); 2], n: usize) -> Vec<String> {
+    let pane = width.saturating_sub(3) / 2;
+    let code_rows = height.saturating_sub(3);
+    let column = |(c, text): (&Candidate, &str)| -> Vec<String> {
+        let mut out = vec![format!("{}:{}", c.path, c.line), String::new()];
+        out.extend(text.lines().map(|l| {
+            l.replace('\t', "    ")
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect()
+        }));
+        if out.len() > code_rows {
+            out.truncate(code_rows.saturating_sub(1));
+            out.push("...".into());
+        }
+        out
+    };
+    let (left, right) = (column(pair[0]), column(pair[1]));
+    let mut screen = vec![
+        fit("Which would you rather have to change?", width),
+        fit("", width),
+    ];
+    for i in 0..code_rows {
+        let l = left.get(i).map_or("", String::as_str);
+        let r = right.get(i).map_or("", String::as_str);
+        screen.push(fit(&format!("{} | {}", fit(l, pane), fit(r, pane)), width));
+    }
+    let keys = format!("<- left    -> right    down: can't tell    q: quit    ({n} judged)");
+    screen.push(fit(&keys, width));
+    screen.truncate(height);
+    screen
+}
+
+/// `text` cut or padded to `width` terminal columns (wide characters take two).
 fn fit(text: &str, width: usize) -> String {
-    let cut: String = text.chars().take(width).collect();
-    format!("{cut:<width$}")
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.extend(std::iter::repeat_n(' ', width - used));
+    out
 }
 
 impl Drop for Screen {
@@ -544,6 +570,73 @@ mod tests {
             assert_eq!((&l.a, &l.b), (&e.b, &e.a));
         }
         assert!((10..=35).contains(&repeats), "{repeats} repeats of 200");
+    }
+
+    #[test]
+    fn keys_and_bytes_answer_alike() {
+        use crossterm::event::KeyEventState;
+        let key = |code, kind| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind,
+            state: KeyEventState::NONE,
+        };
+        let press = |code| key_answer(key(code, KeyEventKind::Press));
+        assert_eq!(press(KeyCode::Left), Some(Answer::Choice("a")));
+        assert_eq!(press(KeyCode::Right), Some(Answer::Choice("b")));
+        assert_eq!(press(KeyCode::Down), Some(Answer::Choice("same")));
+        assert_eq!(press(KeyCode::Esc), Some(Answer::Quit));
+        assert_eq!(press(KeyCode::Up), None);
+        assert_eq!(key_answer(key(KeyCode::Left, KeyEventKind::Release)), None);
+        let ctrl_c = KeyEvent {
+            modifiers: KeyModifiers::CONTROL,
+            ..key(KeyCode::Char('c'), KeyEventKind::Press)
+        };
+        assert_eq!(key_answer(ctrl_c), Some(Answer::Quit));
+        for b in *b"halbsqx\n" {
+            assert_eq!(
+                byte_answer(b),
+                press(KeyCode::Char(b as char)),
+                "{}",
+                b as char
+            );
+        }
+    }
+
+    #[test]
+    fn layout_fits_any_terminal() {
+        let c = |path: &str| Candidate {
+            path: path.into(),
+            lineage: String::new(),
+            lang: "rust".into(),
+            blob: String::new(),
+            start: 0,
+            end: 0,
+            line: 7,
+            tokens: 50,
+        };
+        let (a, b) = (c("src/a.rs"), c("src/日本.rs"));
+        let long: String = (0..100)
+            .map(|i| format!("    let x{i} = \"界\t{i}\";\r\n"))
+            .collect();
+        use unicode_width::UnicodeWidthStr;
+        for (w, h) in [(120, 40), (80, 24), (20, 6), (3, 3), (1, 1), (0, 0)] {
+            let screen = layout(w, h, [(&a, "fn a() {}\r\n"), (&b, &long)], 3);
+            assert!(screen.len() <= h, "{w}x{h}: {} rows", screen.len());
+            for row in &screen {
+                assert_eq!(row.width(), w, "{w}x{h}: {row:?}");
+                assert!(!row.chars().any(char::is_control), "{row:?}");
+            }
+        }
+        let screen = layout(80, 10, [(&a, "fn a() {}\n"), (&b, &long)], 3);
+        assert!(screen[0].starts_with("Which would you rather have to change?"));
+        assert!(
+            screen[2].starts_with("src/a.rs:7") && screen[2].contains("| src/日本.rs:7"),
+            "{:?}",
+            screen[2]
+        );
+        assert!(screen[8].contains("| ..."), "{:?}", screen[8]);
+        assert!(screen[9].starts_with("<- left") && screen[9].contains("(3 judged)"));
     }
 
     #[test]

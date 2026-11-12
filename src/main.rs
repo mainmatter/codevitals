@@ -106,9 +106,9 @@ enum Cli {
     Label {
         #[arg(long, default_value = "codevitals.duckdb")]
         db: PathBuf,
-        /// Repository the functions are read from.
-        #[arg(long, default_value = ".")]
-        repo: PathBuf,
+        /// Repository the functions are read from; the one scanned when omitted.
+        #[arg(long)]
+        repo: Option<PathBuf>,
         /// Labels file (JSON Lines) to append to.
         #[arg(long, default_value = "codevitals-labels.jsonl")]
         labels: PathBuf,
@@ -234,8 +234,8 @@ fn main() -> Result<()> {
             repo,
             labels,
         } => {
-            let repo = open_repo(&repo)?;
             let mut db = open_scanned(&path)?;
+            let repo = db::scanned_repo(&db, repo.as_deref())?;
             let made = label::run(&repo, &mut db, &labels)?;
             eprintln!("{made} judgments added to {}", labels.display());
         }

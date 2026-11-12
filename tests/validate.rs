@@ -159,3 +159,53 @@ fn defects_after_a_cut() {
     assert!(json.contains("recall may be as low as 0.6"), "{json}");
     assert!(json.contains(r#""labels":{"count":0,"#), "{json}");
 }
+
+/// Functions without a parameter list (JS arrows: params is NULL) decide nothing for
+/// params, and break nothing else.
+#[test]
+fn missing_values_decide_nothing() {
+    let mut r = Repo::new();
+    r.write(
+        "a.js",
+        "export const f = x => { if (x) { return 1; } return 2; };\nexport const g = y => y + 1;\n",
+    );
+    r.commit("main", "c0\n", 0, &[]);
+    scan(&r.dir, "main");
+    let f = rows(
+        &r.dir,
+        "select blob, start_byte, end_byte from function_facts order by start_byte",
+    );
+    let f: Vec<Vec<&str>> = f
+        .split(") (")
+        .map(|s| s.trim_matches(['(', ')']).split(',').collect())
+        .collect();
+    let line = format!(
+        r#"{{"rater":"ann","n":0,"time":"2026-01-01T00:00:00Z","a_blob":"{}","a_start":{},"a_end":{},"a_path":"a.js","b_blob":"{}","b_start":{},"b_end":{},"b_path":"a.js","choice":"b","ms":1,"a_commits":0,"b_commits":0,"repeat_of":null}}"#,
+        f[0][0], f[0][1], f[0][2], f[1][0], f[1][1], f[1][2]
+    );
+    let labels = r.dir.path().join("labels.jsonl");
+    std::fs::write(&labels, line + "\n").unwrap();
+    let json = succeeds(
+        &r.dir,
+        &[
+            "validate",
+            "--format",
+            "json",
+            "--labels",
+            labels.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        json.contains(r#"{"metric":"params","baseline":false,"pairs":0,"#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#"{"metric":"decisions","baseline":false,"pairs":1,"share":1,"#),
+        "{json}"
+    );
+    let text = succeeds(&r.dir, &["validate", "--labels", labels.to_str().unwrap()]);
+    assert!(
+        text.contains("no pairs differ") && !text.contains("NaN"),
+        "{text}"
+    );
+}

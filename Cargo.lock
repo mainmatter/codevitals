@@ -478,6 +478,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
+ "unicode-width",
  "xxhash-rust",
 ]
 

@@ -1,5 +1,6 @@
--- One row: the layout and extractor versions of the data (db.rs).
-create table if not exists codevitals (schema integer, extractor integer);
+-- One row: the layout and extractor versions of the data (db.rs), and the git
+-- directory of the repository scanned, whose objects hold the blobs.
+create table if not exists codevitals (schema integer, extractor integer, repo text);
 -- The metric views (metrics.sql).
 create schema if not exists metrics;
 -- Candidate metrics without supporting evidence yet (experimental.sql), kept off

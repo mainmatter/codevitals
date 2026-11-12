@@ -24,9 +24,13 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
         "delete from fingerprints where blob not in (select blob from spans)",
         [],
     )?;
-    db.execute_batch(&format!(
-        "delete from codevitals; insert into codevitals values ({SCHEMA}, {V})"
-    ))?;
+    let git_dir =
+        std::fs::canonicalize(repo.git_dir()).unwrap_or_else(|_| repo.git_dir().to_path_buf());
+    db.execute("delete from codevitals", [])?;
+    db.execute(
+        "insert into codevitals values (?, ?, ?)",
+        params![SCHEMA, V, git_dir.to_string_lossy()],
+    )?;
     // Every path a blob ever had, in order: the blob is parsed in the language of the
     // first one with a known extension (an empty __init__.py shares its blob with
     // every other empty file).

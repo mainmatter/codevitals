@@ -224,7 +224,12 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
         decided += 1;
         let signs = (0..METRICS.len())
             .map(|i| -> duckdb::Result<i8> {
-                let (a, b): (f64, f64) = (r.get(2 + 2 * i)?, r.get(3 + 2 * i)?);
+                // A metric a function lacks (no parameter list: params is NULL)
+                // decides nothing.
+                let (a, b): (Option<f64>, Option<f64>) = (r.get(2 + 2 * i)?, r.get(3 + 2 * i)?);
+                let (Some(a), Some(b)) = (a, b) else {
+                    return Ok(0);
+                };
                 // The function the rater would rather not change: the one not chosen.
                 let (kept, chosen) = if choice == "a" { (b, a) } else { (a, b) };
                 Ok(match kept.partial_cmp(&chosen) {
@@ -520,6 +525,13 @@ impl Report {
 
     pub fn text(&self) -> String {
         let d = &self.defects;
+        if d.fixes == 0 {
+            let out = format!(
+                "defects: {} cuts of {} days, no fix touches after them: history too short or without fixes\n\n",
+                d.cuts, d.window_days
+            );
+            return out + &self.labels_text();
+        }
         let mut out = format!(
             "defects: {} cuts of {} days, {} fix touches in the window after a cut\n\
              share of them in the files ranked first that hold {:.0}% of the tokens (pooled, mean over cuts)\n",
@@ -563,22 +575,23 @@ impl Report {
                 (false, Some((d, lo, hi))) => format!("{d:+.3} ({lo:+.3}, {hi:+.3})"),
                 (false, None) => "-".to_owned(),
             };
+            let (share, interval) = match m.pairs {
+                0 => ("-".to_owned(), "-".to_owned()),
+                _ => (
+                    format!("{:.3}", m.share),
+                    format!("({:.3}, {:.3})", m.low, m.high),
+                ),
+            };
+            let verdict = match (m.metric == METRICS[0], m.pairs, m.supported) {
+                (true, _, _) => "",
+                (false, 0, _) => "no pairs differ",
+                (false, _, true) => "yes",
+                (false, _, false) => "no",
+            };
             writeln!(
                 out,
-                "{:<12} {:>5}  {:>5.3}  ({:.3}, {:.3})  {:<26} {}",
-                m.metric,
-                m.pairs,
-                m.share,
-                m.low,
-                m.high,
-                vs,
-                if m.metric == METRICS[0] {
-                    ""
-                } else if m.supported {
-                    "yes"
-                } else {
-                    "no"
-                }
+                "{:<12} {:>5}  {:>5}  {:<14}  {:<26} {verdict}",
+                m.metric, m.pairs, share, interval, vs
             )
             .expect("write to String");
         }
