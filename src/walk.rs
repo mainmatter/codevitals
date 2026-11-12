@@ -108,10 +108,10 @@ pub fn walk(
             })()
             .with_context(|| format!("read commit {id}"))?;
             commits.append_row(params![seq, id.to_string(), time, author, message])?;
-            for (path, blob) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
+            for (path, (blob, _)) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
                 attributes.set(path, blob.as_deref().map(read).transpose()?);
             }
-            for (path, blob) in &rows {
+            for (path, (blob, source)) in &rows {
                 let (attr, test_features) = match blob {
                     Some(_) => (
                         attributes
@@ -121,7 +121,7 @@ pub fn walk(
                     ),
                     None => (None, None),
                 };
-                changed.append_row(params![seq, path, blob, attr, test_features])?;
+                changed.append_row(params![seq, path, blob, attr, test_features, source])?;
             }
             debug!(seq, %id, changes = rows.len(), elapsed = ?diffing.elapsed(), "commit");
             seq += 1;
@@ -137,16 +137,32 @@ pub fn walk(
     Ok((chain.len(), changes))
 }
 
+/// A commit's change to one path: its new blob (`None` when the file is gone), and
+/// the path it was renamed from.
+type Row = (Option<String>, Option<String>);
+
 /// A commit's changes against its first parent (the root's against the empty tree):
-/// each changed path with its new blob, `None` when the file is gone.
-fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String, Option<String>>> {
+/// each changed path with its new blob and, for a rename, its source path, which
+/// gets a row of its own as deleted. Renames are detected as git does by default:
+/// a deleted and an added file at least 50% similar.
+fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String, Row>> {
     // The chain walk already found every parent, so a shallow boundary cannot hide one here.
     let prev = match commit.parent_ids().next() {
         Some(p) => repo.find_commit(p)?.tree()?,
         None => repo.empty_tree(),
     };
     let mut rows = BTreeMap::new();
-    for c in repo.diff_tree_to_tree(&prev, &commit.tree()?, gix::diff::Options::default())? {
+    let mut insert = |path: String, row: Row| {
+        ensure!(
+            !rows.contains_key(&path),
+            "two changes for the path {path:?}"
+        );
+        rows.insert(path, row);
+        Ok(())
+    };
+    let mut options = gix::diff::Options::default();
+    options.track_rewrites(Some(gix::diff::Rewrites::default()));
+    for c in repo.diff_tree_to_tree(&prev, &commit.tree()?, options)? {
         let (old, new) = match c {
             Change::Addition { .. } => (None, file(c.entry_mode_and_id())),
             Change::Deletion { .. } => (file(c.entry_mode_and_id()), None),
@@ -154,15 +170,36 @@ fn diff(repo: &gix::Repository, commit: &gix::Commit) -> Result<BTreeMap<String,
                 file(c.source_entry_mode_and_id()),
                 file(c.entry_mode_and_id()),
             ),
-            Change::Rewrite { .. } => unreachable!("rename tracking is off"),
+            Change::Rewrite {
+                ref source_location,
+                copy,
+                ..
+            } => {
+                let (old, new) = (
+                    file(c.source_entry_mode_and_id()),
+                    file(c.entry_mode_and_id()),
+                );
+                match (old.is_some(), new.is_some()) {
+                    (true, true) => {
+                        let source = path_text(source_location);
+                        if !copy {
+                            insert(source.clone(), (None, None))?;
+                        }
+                        insert(path_text(c.location()), (new, Some(source)))?;
+                        continue;
+                    }
+                    // A symlink or submodule on either side: no file was renamed.
+                    _ => {
+                        if old.is_some() && !copy {
+                            insert(path_text(source_location), (None, None))?;
+                        }
+                        (None, new)
+                    }
+                }
+            }
         };
         if old != new {
-            let path = path_text(c.location());
-            ensure!(
-                !rows.contains_key(&path),
-                "two changes for the path {path:?}"
-            );
-            rows.insert(path, new);
+            insert(path_text(c.location()), (new, None))?;
         }
     }
     Ok(rows)

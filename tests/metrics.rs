@@ -27,23 +27,23 @@ fn metric_views() {
             "select seq, value, files from metrics.size",
             "(0,18,1) (1,36,2) (2,36,2) (3,45,3)",
         ),
-        // Both windows hold c1 (a.rs and src/b.rs: 1 step apart) and c2 (src/b.rs and
-        // src/c.rs: 0 steps): observed 1/2. The window's files a.rs, src/b.rs, src/c.rs
-        // are 1, 1 and 0 steps apart pairwise: chance gives 2/3.
+        // c2 renames src/b.rs to src/c.rs: one change, so only c1 (a.rs and src/b.rs:
+        // 1 step apart) changes two files, as far apart as its window's two files.
         (
             "select seq, round(value, 4), observed, round(expected, 4), commits from metrics.co_change_distance",
-            "(2,0.75,0.5,0.6667,2) (3,0.75,0.5,0.6667,2)",
+            "(2,1.0,1.0,1.0,1) (3,1.0,1.0,1.0,1)",
         ),
-        // Only a.rs at c1 changed again within 7 days (one day after c0).
+        // Only a.rs at c1 changed again within 7 days (one day after c0); the rename at
+        // c2 moves src/b.rs without editing it.
         (
             "select seq, value, commits, modifications from metrics.rework",
             "(2,1.0,1,1) (3,1.0,1,1)",
         ),
-        // Window c0..c2: a.rs 1 + 1/2, src/b.rs 1/2 + 1/2, src/c.rs 1/2, so 1 / sum p^2 = 2.5714.
-        // Window c1..c3: a.rs 1/2, src/b.rs 1, src/c.rs 1/2, d.rs 1, so 3.6.
+        // src/b.rs and src/c.rs are one lineage (b). Window c0..c2: a.rs 1 + 1/2, b 1/2 + 1,
+        // so 1 / sum p^2 = 2. Window c1..c3: a.rs 1/2, b 3/2, d.rs 1, so 2.5714.
         (
             "select seq, round(value, 4), round(files_per_commit, 4), round(rust, 4) from metrics.change_entropy",
-            "(2,2.5714,1.6667,2.5714) (3,3.6,1.6667,3.6)",
+            "(2,2.0,1.3333,2.0) (3,2.5714,1.3333,2.5714)",
         ),
         // No function is pub, so all function tokens are non-public.
         (
@@ -56,8 +56,8 @@ fn metric_views() {
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
         ("select count(*) as seq from metrics.duplication", "(0)"),
-        // Window c0..c2: a.rs (c0, c1) and src/b.rs (c1, c2) each changed only by t.
-        // Window c1..c3: only src/b.rs changes twice.
+        // Window c0..c2: a.rs (c0, c1) and lineage src/b.rs, src/c.rs (c1, c2) each
+        // changed only by t. Window c1..c3: only that lineage changes twice.
         (
             "select seq, value, files from metrics.ownership",
             "(2,1.0,2) (3,1.0,1)",

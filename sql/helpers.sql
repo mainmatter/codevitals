@@ -154,10 +154,38 @@ select seq, max(t) over (order by seq rows unbounded preceding) as time from (
     select seq, coalesce(lag(time) over w, time) as a, time as b, coalesce(lead(time) over w, time) as c
     from commits window w as (order by seq)));
 
+-- A file's lineage: one id for a file across renames, `born:path` of the version
+-- that started it. A path's life runs from a change that gives it a blob after none
+-- to its deletion; a life that starts as a rename (`source`) continues the lineage
+-- of the source's life, which the same commit ends.
+create or replace view lineages as
+with recursive c as (
+  select seq, path, blob, source,
+         blob is not null and lag(blob) over (partition by path order by seq) is null as starts
+  from changes),
+rows as (
+  select seq, path, blob, source,
+         max(seq) filter (starts) over (partition by path order by seq rows unbounded preceding) as born
+  from c),
+lives as (
+  select l.path, l.born, l.source, s.born as source_born
+  from rows l left join rows s on s.path = l.source and s.seq = l.seq and s.blob is null
+  where l.seq = l.born),
+lineage as (
+  select path, born, born || ':' || path as lineage from lives where source_born is null
+  union all
+  select l.path, l.born, p.lineage
+  from lineage p join lives l on l.source = p.path and l.source_born = p.born)
+select r.seq, r.path, r.blob, r.source, g.lineage
+from rows r join lineage g using (path, born);
+
+-- Changes to production code, each with its file's lineage. The deletion that a
+-- rename implies is no change of its own: the lineage changes once, at its new path.
 create or replace view code_changes as
-select x.seq, x.path, x.blob
-from changes x join path_roles r using (path)
-where r.role = 'code';
+select x.seq, x.path, x.blob, x.lineage
+from lineages x join path_roles r using (path)
+where r.role = 'code'
+  and not (x.blob is null and (x.seq, x.path) in (select seq, source from changes where source is not null));
 
 create or replace view code_commits as
 select seq, row_number() over (order by seq) as n, any_value(c.time) as time

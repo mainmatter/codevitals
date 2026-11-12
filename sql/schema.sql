@@ -7,7 +7,10 @@ create table if not exists commits (
   seq integer, id text, time timestamp, author text, message text);
 -- attr: the role .gitattributes give the path at that commit; test_features: the
 -- cargo features they declare test-only there, joined by `,` (attributes.rs).
-create table if not exists changes (seq integer, path text, blob text, attr text, test_features text);
+-- source: the path the file was renamed from (walk.rs), which has a row of its own
+-- with a NULL blob.
+create table if not exists changes (
+  seq integer, path text, blob text, attr text, test_features text, source text);
 create table if not exists spans (
   blob text, v integer, lang text, kind text, name text,
   line integer, end_line integer, tokens integer, comments integer,

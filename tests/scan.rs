@@ -52,11 +52,17 @@ fn fixture_tables() {
     let (plus, d) = (blob("main~2:src/b.rs"), blob("main:d.rs"));
     assert_rows(
         dir,
-        "select seq, path, blob from changes order by seq, path",
+        "select seq, path, blob, source from changes order by seq, path",
         format!(
-            "(0,README.md,{readme}) (0,a.rs,{a1}) (1,a.rs,{a2}) (1,src/b.rs,{plus}) \
-             (2,README.md,NULL) (2,src/b.rs,NULL) (2,src/c.rs,{plus}) (3,d.rs,{d})"
+            "(0,README.md,{readme},NULL) (0,a.rs,{a1},NULL) (1,a.rs,{a2},NULL) (1,src/b.rs,{plus},NULL) \
+             (2,README.md,NULL,NULL) (2,src/b.rs,NULL,NULL) (2,src/c.rs,{plus},src/b.rs) (3,d.rs,{d},NULL)"
         ),
+    );
+    // src/c.rs continues the lineage of src/b.rs, which it was renamed from.
+    assert_rows(
+        dir,
+        "select distinct path, lineage from lineages order by path",
+        "(README.md,0:README.md) (a.rs,0:a.rs) (d.rs,3:d.rs) (src/b.rs,1:src/b.rs) (src/c.rs,1:src/b.rs)",
     );
     assert_rows(
         dir,
@@ -78,6 +84,42 @@ fn fixture_tables() {
                  where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
         ),
         format!("({a1},add,18,0) ({a2},add,18,2)"),
+    );
+}
+
+/// Renames, also with edits, continue a file's lineage through any number of moves;
+/// a path deleted and added again starts a new one; an unrelated file added where
+/// another was deleted is no rename.
+#[test]
+fn renames_continue_lineages() {
+    let body = |n: usize| {
+        (0..n)
+            .map(|i| format!("fn f{i}(x: i32) -> i32 {{ x + {i} }}\n"))
+            .collect::<String>()
+    };
+    let mut r = common::Repo::new();
+    r.write("a.rs", body(10)).write("z.rs", body(3));
+    r.commit("main", "c0\n", 0, &[]);
+    r.remove("a.rs").write("src/a.rs", body(10));
+    r.extend("move\n", 1);
+    r.remove("src/a.rs").write("lib/b.rs", body(11)); // renamed and edited
+    r.extend("move and edit\n", 2);
+    r.remove("z.rs");
+    r.extend("delete\n", 3);
+    r.write("z.rs", "struct Unrelated;\n");
+    r.extend("re-add\n", 4);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        "select seq, path, source, lineage from lineages order by seq, path",
+        "(0,a.rs,NULL,0:a.rs) (0,z.rs,NULL,0:z.rs) (1,a.rs,NULL,0:a.rs) (1,src/a.rs,a.rs,0:a.rs) \
+         (2,lib/b.rs,src/a.rs,0:a.rs) (2,src/a.rs,NULL,0:a.rs) (3,z.rs,NULL,0:z.rs) (4,z.rs,NULL,4:z.rs)",
+    );
+    // The deletions a rename implies are no changes of their own.
+    assert_rows(
+        &r.dir,
+        "select seq, path from code_changes order by seq, path",
+        "(0,a.rs) (0,z.rs) (1,src/a.rs) (2,lib/b.rs) (3,z.rs) (4,z.rs)",
     );
 }
 

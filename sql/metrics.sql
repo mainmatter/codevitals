@@ -55,11 +55,12 @@ Trend: rising means work spreads across the tree: what changes together does not
 create or replace view metrics.rework as
 with v as (
   select x.seq, x.blob,
-         c.time - lag(c.time) over (partition by x.path order by x.seq) as age
+         c.time - lag(c.time) over (partition by x.lineage order by x.seq) as age,
+         x.blob is not distinct from lag(x.blob) over (partition by x.lineage order by x.seq) as moved
   from code_changes x join commit_times c using (seq)),
 per_commit as (
   select seq, avg((age <= to_days(rework_days()))::int) as reworked, count(*) as modifications
-  from v where age is not null and blob is not null group by seq)
+  from v where age is not null and blob is not null and not moved group by seq)
 select w.win as seq, avg(reworked) as value,
        low(reworked) as low, high(reworked) as high,
        count(*) as commits, sum(modifications) as modifications, any_value(w.span_weeks) as span_weeks
@@ -73,14 +74,16 @@ Read: 0.2 means a fifth of a typical commit''s edits rework last week''s code. E
 
 Trend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.';
 
--- Each non-bulk code commit weighs 1, split over its files.
+-- Each non-bulk code commit weighs 1, split over its files (lineages: a renamed file
+-- stays one file).
 create or replace view change_weights as
-select seq, path, 1 / count(*) over (partition by seq) as w, count(*) over (partition by seq) as k
+select seq, path, lineage, 1 / count(*) over (partition by seq) as w, count(*) over (partition by seq) as k
 from code_changes
 qualify count(*) over (partition by seq) <= max_commit_files();
 
 create or replace view metrics.change_entropy as
-with f as (select w.win, c.path, sum(c.w) as w from windows w join change_weights c using (seq) group by all),
+with f as (select w.win, c.lineage, any_value(c.path) as path, sum(c.w) as w
+           from windows w join change_weights c using (seq) group by w.win, c.lineage),
 p as (select win, family(path) as family, w / sum(w) over (partition by win) as p,
             w / sum(w) over (partition by win, family(path)) as p_family from f),
 commits as (select w.win, avg(k) as files_per_commit, count(*) as commits, any_value(w.span_weeks) as span_weeks
@@ -176,12 +179,12 @@ Trend: rising means logic piles up in a few large functions. Unvalidated.';
 
 create or replace view metrics.ownership as
 with changes_by_author as (
-  select w.win, x.path, c.author, count(*) as n
+  select w.win, x.lineage, c.author, count(*) as n
   from windows w join change_weights x using (seq) join commits c using (seq)
   group by all),
 files as (
-  select win, path, max(n) / sum(n) as top_share
-  from changes_by_author group by win, path having sum(n) >= 2),
+  select win, lineage, max(n) / sum(n) as top_share
+  from changes_by_author group by win, lineage having sum(n) >= 2),
 spans as (select win, any_value(span_weeks) as span_weeks from windows group by win)
 select f.win as seq, avg(f.top_share) as value,
        low(f.top_share) as low, high(f.top_share) as high,
