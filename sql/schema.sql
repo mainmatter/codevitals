@@ -27,6 +27,18 @@ create table if not exists spans (
   params integer, hash ubigint, errors integer, start_byte integer, end_byte integer,
   depth integer);
 
+-- Human judgments of pairs of functions (labels.rs, `cv label`): which of two the
+-- rater would rather not have to change. Loaded from the labels file, which keeps them
+-- across rescans; a function is its blob and byte range, so labels survive both.
+-- n numbers each rater's judgments; repeat_of is the n of the rater's earlier
+-- judgment of the same pair (sides may be swapped). choice: a, b or same.
+-- a_commits, b_commits: the rater's commits to each function's file, then.
+create table if not exists labels (
+  rater text, n integer, time timestamp,
+  a_blob text, a_start integer, a_end integer, a_path text,
+  b_blob text, b_start integer, b_end integer, b_path text,
+  choice text, ms integer, a_commits integer, b_commits integer, repeat_of integer);
+
 -- Derived from import_edges by graph.rs, not a fact.
 create table if not exists cones (path text, since integer, until integer, cone integer, scc integer);
 

@@ -18,6 +18,8 @@ mod attributes;
 mod db;
 mod diff;
 mod graph;
+#[allow(dead_code)] // used by `cv label` and `cv validate`
+mod labels;
 mod metrics;
 mod parse;
 mod units;

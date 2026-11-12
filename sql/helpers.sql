@@ -219,6 +219,13 @@ from lineages x join path_roles r using (path)
 where r.role = 'code'
   and not (x.blob is null and (x.seq, x.path) in (select seq, source from changes where source is not null));
 
+-- How many commits each author identity made to each file lineage: a rater's
+-- familiarity with the functions shown to them (labels).
+create or replace view author_file_commits as
+select a.identity, x.lineage, count(distinct x.seq) as commits
+from lineages x join authors a using (seq)
+group by all;
+
 create or replace view code_commits as
 select seq, row_number() over (order by seq) as n, any_value(c.time) as time
 from code_changes join commit_times c using (seq) group by seq;

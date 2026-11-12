@@ -1,0 +1,247 @@
+//! Labels: human judgments of pairs of functions. The labels file (JSON Lines, one
+//! judgment per line, appended to) is their record: it outlives the database, which
+//! a new codevitals version may need rebuilt, and raters can merge theirs. `labels`
+//! in the database is loaded from it.
+
+use std::io::Write as _;
+use std::path::Path;
+
+use anyhow::{Context, Result, ensure};
+use duckdb::Connection;
+
+/// One judgment: which of two functions the rater would rather not have to change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Label {
+    pub rater: String,
+    /// The rater's judgments before this one.
+    pub n: i64,
+    /// Seconds since the Unix epoch.
+    pub time: i64,
+    pub a: Function,
+    pub b: Function,
+    /// `a`, `b` or `same` (can't tell).
+    pub choice: &'static str,
+    pub ms: i64,
+    pub a_commits: i64,
+    pub b_commits: i64,
+    /// `n` of the rater's earlier judgment of the same pair.
+    pub repeat_of: Option<i64>,
+}
+
+/// A function as stored: its blob and byte range, and the path it was shown at.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Function {
+    pub blob: String,
+    pub start: i64,
+    pub end: i64,
+    pub path: String,
+}
+
+/// The columns of a labels file, in the order of the `labels` table.
+const COLUMNS: &str = "{'rater': 'varchar', 'n': 'integer', 'time': 'timestamp',
+  'a_blob': 'varchar', 'a_start': 'integer', 'a_end': 'integer', 'a_path': 'varchar',
+  'b_blob': 'varchar', 'b_start': 'integer', 'b_end': 'integer', 'b_path': 'varchar',
+  'choice': 'varchar', 'ms': 'integer', 'a_commits': 'integer', 'b_commits': 'integer',
+  'repeat_of': 'integer'}";
+
+/// Replaces the rows of `labels` (in `table`, e.g. `labels` or a temp table) with
+/// those of the labels file at `file`; none when it does not exist. Returns the
+/// number loaded.
+pub fn load(db: &Connection, file: &Path, table: &str) -> Result<usize> {
+    db.execute_batch(&format!("delete from {table}"))?;
+    if !file.exists() || std::fs::metadata(file)?.len() == 0 {
+        return Ok(0);
+    }
+    let quoted = file.to_string_lossy().replace('\'', "''");
+    let loaded = db
+        .execute(
+            &format!(
+                "insert into {table} select * from read_json('{quoted}', format = 'newline_delimited',
+                   columns = {COLUMNS}, timestampformat = '%Y-%m-%dT%H:%M:%SZ')"
+            ),
+            [],
+        )
+        .with_context(|| format!("read labels from {file:?}"))?;
+    let bad: i64 = db.query_row(
+        &format!(
+            "select count(*) from {table} where choice not in ('a', 'b', 'same') or choice is null"
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(
+        bad == 0,
+        "{file:?}: {bad} labels have a choice other than a, b or same"
+    );
+    Ok(loaded)
+}
+
+/// Appends `label` to the labels file at `file`, creating it if needed.
+pub fn append(file: &Path, label: &Label) -> Result<()> {
+    let text = |s: &str| {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out + "\""
+    };
+    let time = chrono_utc(label.time);
+    let repeat = label.repeat_of.map_or("null".to_owned(), |n| n.to_string());
+    let line = format!(
+        "{{\"rater\":{},\"n\":{},\"time\":\"{time}\",\"a_blob\":\"{}\",\"a_start\":{},\"a_end\":{},\"a_path\":{},\
+         \"b_blob\":\"{}\",\"b_start\":{},\"b_end\":{},\"b_path\":{},\"choice\":\"{}\",\"ms\":{},\
+         \"a_commits\":{},\"b_commits\":{},\"repeat_of\":{repeat}}}\n",
+        text(&label.rater),
+        label.n,
+        label.a.blob,
+        label.a.start,
+        label.a.end,
+        text(&label.a.path),
+        label.b.blob,
+        label.b.start,
+        label.b.end,
+        text(&label.b.path),
+        label.choice,
+        label.ms,
+        label.a_commits,
+        label.b_commits,
+    );
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+        .with_context(|| format!("open {file:?}"))?;
+    f.write_all(line.as_bytes())
+        .with_context(|| format!("append to {file:?}"))?;
+    Ok(())
+}
+
+/// `secs` since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ` (proleptic Gregorian, UTC).
+fn chrono_utc(secs: i64) -> String {
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil from days (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc() {
+        assert_eq!(chrono_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(chrono_utc(1_767_225_600 + 86_399), "2026-01-01T23:59:59Z");
+        assert_eq!(chrono_utc(951_782_400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn append_then_load() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("labels.jsonl");
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(codevitals::SQL).unwrap();
+        assert_eq!(load(&db, &file, "labels").unwrap(), 0);
+        let f = |blob: &str, path: &str| Function {
+            blob: blob.into(),
+            start: 3,
+            end: 40,
+            path: path.into(),
+        };
+        let first = Label {
+            rater: "Ann \"A\" <ann@x>".into(),
+            n: 0,
+            time: 1_767_225_600,
+            a: f("aa", "src/a.rs"),
+            b: f("bb", "src/b.rs"),
+            choice: "a",
+            ms: 4200,
+            a_commits: 3,
+            b_commits: 0,
+            repeat_of: None,
+        };
+        append(&file, &first).unwrap();
+        let repeat = Label {
+            n: 1,
+            a: first.b.clone(),
+            b: first.a.clone(),
+            choice: "b",
+            repeat_of: Some(0),
+            ..first.clone()
+        };
+        append(&file, &repeat).unwrap();
+        assert_eq!(load(&db, &file, "labels").unwrap(), 2);
+        let rows: Vec<(String, i64, String, String, String, Option<i64>)> = db
+            .prepare(
+                "select rater, n, time::varchar, a_path, choice, repeat_of from labels order by n",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Ann \"A\" <ann@x>".into(),
+                    0,
+                    "2026-01-01 00:00:00".into(),
+                    "src/a.rs".into(),
+                    "a".into(),
+                    None
+                ),
+                (
+                    "Ann \"A\" <ann@x>".into(),
+                    1,
+                    "2026-01-01 00:00:00".into(),
+                    "src/b.rs".into(),
+                    "b".into(),
+                    Some(0)
+                ),
+            ]
+        );
+        // Loading again replaces, not duplicates.
+        assert_eq!(load(&db, &file, "labels").unwrap(), 2);
+        let count: i64 = db
+            .query_row("select count(*) from labels", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        // A bad choice is refused.
+        std::fs::write(
+            &file,
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .replace("\"choice\":\"a\"", "\"choice\":\"x\""),
+        )
+        .unwrap();
+        assert!(load(&db, &file, "labels").is_err());
+    }
+}
