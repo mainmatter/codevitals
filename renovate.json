@@ -1,6 +1,31 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits",
+    "schedule:weekly",
+    "group:allNonMajor"
+  ],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "nix": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "The core and grammars are pinned exactly and move together: grammar updates can rename the nodes langs/*.scm queries match.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tree-sitter", "tree-sitter-*"],
+      "groupName": "tree-sitter"
+    },
+    {
+      "description": "One PR for all workflow actions, majors included: their majors rarely need changes here.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    }
   ]
 }
