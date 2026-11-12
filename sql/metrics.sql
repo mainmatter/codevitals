@@ -475,3 +475,18 @@ What: the share of each language''s imports of this repository''s own code that 
 Read: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.
 
 Trend: a drop means the dependency metrics became less complete, not that the code changed.';
+
+create or replace view metrics.modularity_violations as
+select p.seq, avg((not p.imported)::int) as value, count(*) filter (not p.imported) as violations,
+       count(*) as pairs, any_value(c.value) as import_coverage
+from units.coupled_pairs p left join metrics.import_coverage c using (seq)
+group by p.seq;
+
+comment on view metrics.modularity_violations is 'DEPENDENCIES: Files changed together without importing each other
+
+What: of the pairs of production files (one language) changed together by at least 3 commits in the last 100 code commits, the share where neither imports the other (value) and their number (violations), each week. import_coverage is beside it: imports codevitals cannot follow make pairs look unrelated and inflate this. Lower is better.
+
+Read: 0.6 means three in five tightly coupled pairs share no visible dependency: the coupling is hidden (a shared format, a protocol, copy-paste).
+
+Trend: rising means more change coupling the code structure does not show. Read it with import_coverage: a drop there raises this. Unvalidated.';
+

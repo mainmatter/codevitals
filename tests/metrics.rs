@@ -848,3 +848,35 @@ fn accretion_counts_growth_of_existing_functions() {
         "(4,0.3333,1,3)",
     );
 }
+
+/// Modularity violations: files changed together often whose imports do not
+/// connect them.
+#[test]
+fn modularity_violations_need_no_import() {
+    let mut r = common::Repo::new();
+    for day in 0..4 {
+        r.write(
+            "pkg/a.py",
+            format!("import pkg.b\n\ndef a():\n    return {day}\n"),
+        )
+        .write("pkg/b.py", format!("def b():\n    return {day}\n"))
+        .write("pkg/c.py", format!("def c():\n    return {day}\n"));
+        match day {
+            0 => r.commit("main", "c0\n", 0, &[]),
+            d => r.extend("edit\n", d),
+        };
+    }
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 4");
+    // a, b and c change together four times; only a and b are connected by an import.
+    assert_rows(
+        &r.dir,
+        "select seq, a, b, commits, imported from units.coupled_pairs order by a, b",
+        "(3,pkg/a.py,pkg/b.py,4,true) (3,pkg/a.py,pkg/c.py,4,false) (3,pkg/b.py,pkg/c.py,4,false)",
+    );
+    assert_rows(
+        &r.dir,
+        "select seq, round(value, 4), violations, pairs, import_coverage from metrics.modularity_violations",
+        "(3,0.6667,2,3,1.0)",
+    );
+}

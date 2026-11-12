@@ -123,3 +123,17 @@ select t.seq, t.lineage, t.path, r.lineage is not null as raised
 from t left join raised r using (seq, lineage);
 
 comment on view units.touches is 'Each change (seq) to a production file with a previous version, pure moves left out, and raised: whether it added decision points or nesting to a function that existed before (same function identity). Unvalidated.';
+
+-- Coupled pairs per weekly window (cochange_pairs), and whether either file imports
+-- the other there.
+create or replace view units.coupled_pairs as
+with edges as (
+  select least(source, target) as x, greatest(source, target) as y, since, until from import_edges),
+e as (
+  select distinct p.win, p.a, p.b
+  from cochange_pairs p join edges e using (x, y)
+  where e.since <= p.win and p.win < e.until)
+select p.win as seq, p.a, p.b, p.commits, e.a is not null as imported
+from cochange_pairs p left join e using (win, a, b);
+
+comment on view units.coupled_pairs is 'Per weekly window (seq): pairs of live production files of one language family changed together by at least cochange_min() non-bulk commits of the window, and imported: whether either imports the other then. Unvalidated.';

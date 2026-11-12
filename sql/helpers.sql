@@ -13,6 +13,7 @@ create or replace macro many_params() as 5;      -- functions with more paramete
 create or replace macro hotspot_days() as 365; -- trailing period whose changes hotspots count
 create or replace macro defect_window_days() as 182; -- windows of the defect check in cv validate
 create or replace macro orphan_months() as 12;   -- an author without a commit for this long has left
+create or replace macro cochange_min() as 3;      -- file pairs changed together this often in a window are coupled
 create or replace macro accretion_touches() as 3; -- files touched fewer times in a window are left out of accretion
 create or replace macro orphaned_share() as 0.5; -- files with more of their changes by departed authors are orphaned
 -- Cargo features whose code counts as test code by name alone (more may be declared
@@ -357,6 +358,28 @@ select c.blob, c.test_features, c.lang,
        coalesce(columns(f.* exclude (blob, test_features)), 0)
 from counts c left join functions f using (blob, test_features)
 left join tests t using (blob, test_features);
+
+-- Pairs of production files of one language family (files import only their own
+-- family) changed together by at least cochange_min() non-bulk commits of a weekly
+-- window, both live at its end, at their paths then. A helper, so `cv metrics`
+-- materializes it: inlined into the import join below it plans badly.
+create or replace view cochange_pairs as
+with c as (
+  select w.win, x.seq, x.lineage, family(x.path) as family
+  from windows w join change_weights x using (seq)),
+pairs as (
+  select a.win, a.lineage as la, b.lineage as lb, count(*) as commits
+  from c a join c b on a.win = b.win and a.seq = b.seq and a.family = b.family and a.lineage < b.lineage
+  group by all having count(*) >= cochange_min()),
+ends as (select win, la as lineage from pairs union select win, lb from pairs),
+paths as (
+  select e.win, e.lineage, x.path, x.blob
+  from ends e asof join code_changes x on x.lineage = e.lineage and e.win >= x.seq)
+select p.win, pa.path as a, pb.path as b, least(pa.path, pb.path) as x, greatest(pa.path, pb.path) as y,
+       p.commits
+from pairs p
+join paths pa on pa.win = p.win and pa.lineage = p.la and pa.blob is not null
+join paths pb on pb.win = p.win and pb.lineage = p.lb and pb.blob is not null;
 
 -- Production totals per commit and language, from blob_facts by change points.
 create or replace view code_totals as
