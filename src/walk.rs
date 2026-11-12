@@ -316,13 +316,10 @@ pub fn diff_trees(
         if renamed_away || Lang::of(path).is_none() {
             continue;
         }
-        let read = |blob: &Option<String>| -> Result<Option<Vec<u8>>> {
-            Ok(match blob {
-                Some(id) => Some(repo.find_blob(oid(id))?.take_data()),
-                None => None,
-            })
-        };
-        let (old, new) = (read(&row.old)?, read(&row.blob)?);
+        let (old, new) = (
+            read(repo, row.old.as_deref())?,
+            read(repo, row.blob.as_deref())?,
+        );
         let lang = Lang::of(path).expect("checked above");
         let parseable =
             |src: &Option<Vec<u8>>| src.as_deref().is_none_or(|src| parseable(lang, src));
@@ -334,6 +331,12 @@ pub fn diff_trees(
         }
     }
     Ok(rows)
+}
+
+/// The bytes of `blob`, if there is one.
+pub fn read(repo: &gix::Repository, blob: Option<&str>) -> Result<Option<Vec<u8>>> {
+    blob.map(|id| Ok(repo.find_blob(oid(id))?.take_data()))
+        .transpose()
 }
 
 /// Lines added and deleted from `old` to `new`, as `git diff --numstat` counts them

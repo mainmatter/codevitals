@@ -131,3 +131,25 @@ fn edit_thrash() {
         "{json}"
     );
 }
+
+/// Thrash follows a file across a rename: a line added before the rename and
+/// deleted after it is thrash, whichever of the two paths sorts first.
+#[test]
+fn edit_thrash_follows_renames() {
+    let mut r = Repo::new();
+    let body = "fn a() {\n    one();\n    two();\n    three();\n    four();\n    five();\n}\n";
+    r.write("a.rs", body);
+    r.commit("main", "base\n", 0, &[]);
+    r.write("a.rs", body.replace("three();", "three();\n    added();"));
+    r.extend("add a line\n", 1);
+    r.remove("a.rs")
+        .write("b.rs", body.replace("three();", "three();\n    added();"));
+    r.extend("rename\n", 2);
+    r.write("b.rs", body);
+    r.extend("drop it again\n", 3);
+    let json = diff(&r, &["main~3", "main"]);
+    assert!(
+        json.contains("\"edit_thrash\":{\"commits\":3,\"added\":1,\"thrashed\":1,"),
+        "{json}"
+    );
+}

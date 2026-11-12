@@ -12,12 +12,9 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use codevitals::Lang;
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
 
-use crate::db::oid;
-use crate::parse::parseable;
-use crate::walk::diff_trees;
+use crate::walk::{diff_trees, read};
 
 /// Lines of source files added by the range's commits, and how many of them later
 /// commits of the range deleted.
@@ -48,12 +45,6 @@ pub fn thrash(
         return Ok(None);
     }
     chain.reverse();
-    let read = |blob: &Option<String>| -> Result<Option<Vec<u8>>> {
-        Ok(match blob {
-            Some(id) => Some(repo.find_blob(oid(id))?.take_data()),
-            None => None,
-        })
-    };
     // Per path: for each line of its current version, whether the range added it.
     let mut lines: HashMap<String, Vec<bool>> = HashMap::new();
     let (mut added, mut thrashed) = (0u64, 0u64);
@@ -62,17 +53,15 @@ pub fn thrash(
             .find_commit(commit.parent_ids().next().expect("on the chain"))?
             .tree()?;
         for (path, row) in diff_trees(repo, &prev, &commit.tree()?)? {
-            let Some(lang) = Lang::of(&path) else {
-                continue;
-            };
-            let from = row.source.clone().unwrap_or_else(|| path.clone());
-            let carried = lines.remove(&from);
-            let (old, new) = (read(&row.old)?, read(&row.blob)?);
-            let ok = |src: &Option<Vec<u8>>| src.as_deref().is_none_or(|s| parseable(lang, s));
-            if !ok(&old) || !ok(&new) {
+            // Rows of source files `diff_trees` counted lines of: not the row a rename
+            // leaves at its old path, which must not take the file's lines.
+            if row.lines.is_none() {
                 continue;
             }
-            let (old, new) = (old.unwrap_or_default(), new.unwrap_or_default());
+            let from = row.source.clone().unwrap_or_else(|| path.clone());
+            let carried = lines.remove(&from);
+            let old = read(repo, row.old.as_deref())?.unwrap_or_default();
+            let new = read(repo, row.blob.as_deref())?.unwrap_or_default();
             let input = InternedInput::new(old.as_slice(), new.as_slice());
             let before = carried
                 .filter(|f| f.len() == input.before.len())
