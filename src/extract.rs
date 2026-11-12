@@ -244,8 +244,38 @@ impl At {
         }
     }
 
-    /// The node in `tree`: the outermost of its kind over its bytes.
+    /// The node in `tree`: the outermost of its kind over its bytes. Found by one
+    /// descent from the root (`Node::parent` walks down from the root each time).
     fn node(self, tree: &Tree) -> Node<'_> {
+        let (start, end) = (self.start.0, self.end.0);
+        let mut cursor = tree.walk();
+        loop {
+            let n = cursor.node();
+            if n.start_byte() == start && n.end_byte() == end && n.kind_id() == self.kind {
+                return n;
+            }
+            // Into the first child that contains the range, if any does.
+            let Some(_) = cursor.goto_first_child_for_byte(start) else {
+                break;
+            };
+            while cursor.node().end_byte() < end
+                || (cursor.node().end_byte() == start && start < end)
+            {
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            let c = cursor.node();
+            if !(c.start_byte() <= start && end <= c.end_byte()) {
+                break;
+            }
+        }
+        self.climb(tree)
+    }
+
+    /// `node` the slow way, for ranges a descent cannot follow (zero-width nodes at a
+    /// sibling's edge): up from the smallest node over the bytes.
+    fn climb(self, tree: &Tree) -> Node<'_> {
         let (start, end) = (self.start.0, self.end.0);
         let at = |n: &Node| n.start_byte() == start && n.end_byte() == end;
         let mut n = tree
@@ -910,14 +940,22 @@ fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<S
     let line = |byte: usize| line_of(&starts, byte);
     let mut picked: Vec<usize> = Vec::new();
     let w = CLONE_W.min(hashes.len());
-    for start in 0..=hashes.len() - w {
-        // The rightmost minimum of the window.
-        let mut best = start;
-        for i in start..start + w {
-            if hashes[i] <= hashes[best] {
-                best = i;
-            }
+    // The rightmost minimum of each window of `w` hashes, by a monotone queue: the
+    // indices of the window whose hash is below every later one's, the first the
+    // window's rightmost minimum.
+    let mut queue = std::collections::VecDeque::with_capacity(w);
+    for (i, &h) in hashes.iter().enumerate() {
+        while queue.back().is_some_and(|&j| hashes[j] >= h) {
+            queue.pop_back();
         }
+        queue.push_back(i);
+        if i + 1 < w {
+            continue;
+        }
+        while queue.front().is_some_and(|&j| j + w <= i) {
+            queue.pop_front();
+        }
+        let best = queue[0];
         if picked.last() != Some(&best) {
             picked.push(best);
         }
