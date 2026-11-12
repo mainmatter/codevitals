@@ -2,6 +2,8 @@
 //! and properties on synthetic facts written straight into the database.
 
 mod common;
+#[path = "common/samples.rs"]
+mod samples;
 
 use std::path::Path;
 
@@ -333,40 +335,14 @@ fn renaming_identifiers_changes_no_structural_metric() {
     assert_ne!(rows(&renamed.dir, names), rows(&original.dir, names));
 }
 
-const RUST_STRUCTURE: &str = "static mut COUNT: i32 = 0;
-fn f(x: Option<i32>) -> i32 {
-    if x.is_some() && x.unwrap() > 0 {
-        for i in 0..3 {
-            if i == 1 || i == 2 { panic!(\"no\"); }
-        }
-    } else if x.is_none() {
-        return x.expect(\"e\");
-    }
-    match x { Some(v) => v, None => 0 }
-}
-";
-
-const C_STRUCTURE: &str = "int counter = 0;
-static int cache[4];
-const int limit = 3;
-extern int shared;
-int f(int a) {
-    if (a > 0 && a < limit) {
-        while (a--) { if (a == 2) goto done; }
-    } else if (a == 0) { longjmp(env, 1); }
-    switch (a) { case 1: return 1; default: return a ? 2 : 3; }
-done:
-    return 0;
-}
-";
-
 /// Per-blob structure facts, checked by hand on the samples whose spans
 /// `tests/extract.rs` pins: decisions are branches plus conditions, and nesting is
 /// the deepest block below the function body.
 #[test]
 fn blob_facts_count_structure() {
     let mut r = fixture();
-    r.write("x.rs", RUST_STRUCTURE).write("x.c", C_STRUCTURE);
+    r.write("x.rs", samples::RUST_STRUCTURE)
+        .write("x.c", samples::C_STRUCTURE);
     r.extend("structure\n", 5);
     scan(&r.dir, "main");
     let facts = |path: &str| {
@@ -393,19 +369,19 @@ fn blob_facts_count_structure() {
 #[test]
 fn change_points_match_per_commit_sums() {
     let mut r = fixture();
-    r.write("x.rs", RUST_STRUCTURE)
-        .write("twin.rs", RUST_STRUCTURE);
+    r.write("x.rs", samples::RUST_STRUCTURE)
+        .write("twin.rs", samples::RUST_STRUCTURE);
     r.extend("add rust\n", 5);
-    r.write("x.c", C_STRUCTURE);
+    r.write("x.c", samples::C_STRUCTURE);
     r.extend("add c\n", 6);
     r.write(
         "x.rs",
-        RUST_STRUCTURE.replace("        for i in 0..3 {\n", "        {\n"),
+        samples::RUST_STRUCTURE.replace("        for i in 0..3 {\n", "        {\n"),
     );
     r.extend("modify rust\n", 7);
     r.remove("x.c");
     r.extend("delete c\n", 8);
-    r.remove("x.rs").write("src/y.rs", RUST_STRUCTURE);
+    r.remove("x.rs").write("src/y.rs", samples::RUST_STRUCTURE);
     r.extend("rename rust\n", 9);
     scan(&r.dir, "main");
     // Every fact of every live production file, summed commit by commit.

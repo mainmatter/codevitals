@@ -1,3 +1,6 @@
+#[path = "common/samples.rs"]
+mod samples;
+
 use codevitals::{Incremental, LANGS, Lang, Span, edits, extract};
 
 /// Kinds of control-flow structure, checked by `structure` instead of `check`.
@@ -38,16 +41,23 @@ fn check(path: &str, src: &str, expected: &str) -> Vec<Span> {
     spans
 }
 
+/// The spans of `src`, parsed as the language of `path`, of the kinds in `keep`,
+/// each as `show` gives it.
+fn kinds<T>(path: &str, src: &str, keep: &[&str], show: impl Fn(Span) -> T) -> Vec<T> {
+    extract(Lang::of(path).expect("known extension"), src.as_bytes())
+        .into_iter()
+        .filter(|s| keep.contains(&s.kind))
+        .map(show)
+        .collect()
+}
+
 /// The control-flow structure of `src`: one line per structural span, as
 /// `kind line depth tokens`, checked against `expected`.
 fn structure(path: &str, src: &str, expected: &str) {
-    let spans = extract(Lang::of(path).expect("known extension"), src.as_bytes());
-    let lines: String = spans
-        .iter()
-        .filter(|s| STRUCTURE.contains(&s.kind))
-        .map(|s| format!("{} {} {} {}\n", s.kind, s.line, s.depth, s.tokens))
-        .collect();
-    assert_eq!(lines, expected, "{path} structure for:\n{src}");
+    let lines = kinds(path, src, &STRUCTURE, |s| {
+        format!("{} {} {} {}\n", s.kind, s.line, s.depth, s.tokens)
+    });
+    assert_eq!(lines.concat(), expected, "{path} structure for:\n{src}");
 }
 
 #[test]
@@ -113,18 +123,7 @@ pub NULL 3 3 10 0 NULL NULL
     );
     structure(
         "x.rs",
-        "static mut COUNT: i32 = 0;
-fn f(x: Option<i32>) -> i32 {
-    if x.is_some() && x.unwrap() > 0 {
-        for i in 0..3 {
-            if i == 1 || i == 2 { panic!(\"no\"); }
-        }
-    } else if x.is_none() {
-        return x.expect(\"e\");
-    }
-    match x { Some(v) => v, None => 0 }
-}
-",
+        samples::RUST_STRUCTURE,
         r#"global_state 1 0 8
 block 2 0 77
 branch 3 0 61
@@ -185,19 +184,7 @@ call g 2 2 4 0 NULL NULL
     );
     structure(
         "x.c",
-        "int counter = 0;
-static int cache[4];
-const int limit = 3;
-extern int shared;
-int f(int a) {
-    if (a > 0 && a < limit) {
-        while (a--) { if (a == 2) goto done; }
-    } else if (a == 0) { longjmp(env, 1); }
-    switch (a) { case 1: return 1; default: return a ? 2 : 3; }
-done:
-    return 0;
-}
-",
+        samples::C_STRUCTURE,
         r#"global_state 1 0 5
 global_state 2 0 7
 block 5 0 72
@@ -477,22 +464,17 @@ mod tests {
 #[cfg(test)] mod testutil;
 mod other;
 "#;
-    let spans = extract(Lang::of("x.rs").unwrap(), src.as_bytes());
-    let tests: Vec<String> = spans
-        .iter()
-        .filter(|s| ["test", "test_if", "mod_decl"].contains(&s.kind))
-        .map(|s| {
-            let text = &src[s.start_byte as usize..s.end_byte as usize];
-            let first = text.lines().next().unwrap();
-            format!(
-                "{} {} {} {}: {first}",
-                s.kind,
-                s.name.as_deref().unwrap_or("-"),
-                s.line,
-                s.end_line
-            )
-        })
-        .collect();
+    let tests = kinds("x.rs", src, &["test", "test_if", "mod_decl"], |s| {
+        let text = &src[s.start_byte as usize..s.end_byte as usize];
+        let first = text.lines().next().unwrap();
+        format!(
+            "{} {} {} {}: {first}",
+            s.kind,
+            s.name.as_deref().unwrap_or("-"),
+            s.line,
+            s.end_line
+        )
+    });
     assert_eq!(
         tests,
         [
@@ -525,13 +507,7 @@ mod other;
 /// impl) and traits, classes, C++ namespaces.
 #[test]
 fn scopes() {
-    let scopes = |path: &str, src: &str| {
-        extract(Lang::of(path).unwrap(), src.as_bytes())
-            .into_iter()
-            .filter(|s| s.kind == "scope")
-            .map(|s| s.name.unwrap())
-            .collect::<Vec<_>>()
-    };
+    let scopes = |path, src| kinds(path, src, &["scope"], |s| s.name.unwrap());
     assert_eq!(
         scopes(
             "x.rs",
@@ -557,13 +533,12 @@ fn scopes() {
 /// unfinished code; in Python and C only where the language has the construct.
 #[test]
 fn panics_by_intent() {
-    let kinds = |path: &str, src: &str| {
-        extract(Lang::of(path).unwrap(), src.as_bytes())
-            .into_iter()
-            .filter(|s| ["throw", "invariant", "unhandled", "unfinished"].contains(&s.kind))
-            .map(|s| format!("{}:{}", s.kind, s.name.unwrap_or_default()))
-            .collect::<Vec<_>>()
-            .join(" ")
+    let kinds = |path, src| {
+        let keep = ["throw", "invariant", "unhandled", "unfinished"];
+        kinds(path, src, &keep, |s| {
+            format!("{}:{}", s.kind, s.name.unwrap_or_default())
+        })
+        .join(" ")
     };
     assert_eq!(
         kinds(
@@ -596,10 +571,8 @@ fn clone_fingerprints() {
         )
     };
     let fps = |src: &str| -> std::collections::HashSet<u64> {
-        extract(Lang::of("x.rs").unwrap(), src.as_bytes())
+        kinds("x.rs", src, &["fingerprint"], |s| s.hash)
             .into_iter()
-            .filter(|s| s.kind == "fingerprint")
-            .map(|s| s.hash)
             .collect()
     };
     let a = fps(&body("sum", "limit"));
@@ -618,12 +591,11 @@ fn clone_fingerprints() {
 /// the signature, vocabulary; and comment markers.
 #[test]
 fn function_extras_and_markers() {
-    let kinds = |path: &str, src: &str| {
-        extract(Lang::of(path).unwrap(), src.as_bytes())
-            .into_iter()
-            .filter(|s| ["forward", "doc", "vocabulary", "marker"].contains(&s.kind))
-            .map(|s| format!("{}:{}:{}:{}", s.kind, s.line, s.tokens, s.comments))
-            .collect::<Vec<_>>()
+    let kinds = |path, src| {
+        let keep = ["forward", "doc", "vocabulary", "marker"];
+        kinds(path, src, &keep, |s| {
+            format!("{}:{}:{}:{}", s.kind, s.line, s.tokens, s.comments)
+        })
     };
     assert_eq!(
         kinds(
@@ -686,14 +658,11 @@ fn degenerate_input() {
 /// Import statements become one `import` span per target path.
 #[test]
 fn imports() {
-    let names = |path: &str, src: &str| {
-        let lang = Lang::of(path).unwrap();
-        extract(lang, src.as_bytes())
-            .into_iter()
-            .filter(|s| ["import", "module"].contains(&s.kind))
-            .map(|s| format!("{}:{}", s.kind, s.name.unwrap()))
-            .collect::<Vec<_>>()
-            .join(" ")
+    let names = |path, src| {
+        kinds(path, src, &["import", "module"], |s| {
+            format!("{}:{}", s.kind, s.name.unwrap())
+        })
+        .join(" ")
     };
     assert_eq!(
         names(
@@ -729,13 +698,7 @@ fn imports() {
 /// tsconfig.json gives its path aliases and baseUrl.
 #[test]
 fn manifests() {
-    let packages = |path: &str, src: &str| {
-        extract(Lang::of(path).unwrap(), src.as_bytes())
-            .into_iter()
-            .filter(|s| s.kind == "package")
-            .map(|s| s.name.unwrap())
-            .collect::<Vec<_>>()
-    };
+    let packages = |path, src| kinds(path, src, &["package"], |s| s.name.unwrap());
     assert_eq!(
         packages(
             "crates/x/Cargo.toml",
@@ -751,12 +714,11 @@ fn manifests() {
         ["@scope/pkg"]
     );
     assert!(Lang::of("pyproject.toml").is_none());
-    let spans = |path: &str, src: &str| {
-        extract(Lang::of(path).unwrap(), src.as_bytes())
-            .into_iter()
-            .filter(|s| s.kind != "file")
-            .map(|s| format!("{}:{}", s.kind, s.name.unwrap()))
-            .collect::<Vec<_>>()
+    let spans = |path, src| {
+        let keep = ["base_url", "alias", "alias_target"];
+        kinds(path, src, &keep, |s| {
+            format!("{}:{}", s.kind, s.name.unwrap())
+        })
     };
     assert_eq!(
         spans(
