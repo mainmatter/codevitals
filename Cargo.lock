@@ -464,6 +464,7 @@ dependencies = [
  "crossterm",
  "duckdb",
  "gix",
+ "jiff",
  "petgraph",
  "rayon",
  "tempfile",

@@ -97,7 +97,8 @@ pub fn load(db: &Connection, file: &Path) -> Result<usize> {
 
 /// Appends `label` to the labels file at `file`, creating it if needed.
 pub fn append(file: &Path, label: &Label) -> Result<()> {
-    let time = chrono_utc(label.time);
+    // In UTC, to the second: `2026-01-01T23:59:59Z`.
+    let time = jiff::Timestamp::from_second(label.time)?;
     let repeat = label.repeat_of.map_or("null".to_owned(), |n| n.to_string());
     let line = format!(
         "{{\"rater\":{},\"n\":{},\"time\":\"{time}\",\"a_blob\":\"{}\",\"a_start\":{},\"a_end\":{},\"a_path\":{},\
@@ -128,36 +129,17 @@ pub fn append(file: &Path, label: &Label) -> Result<()> {
     Ok(())
 }
 
-/// `secs` since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ` (proleptic Gregorian, UTC).
-fn chrono_utc(secs: i64) -> String {
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Civil from days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Label times are written as before: UTC, to the second, `Z`.
     #[test]
     fn utc() {
-        assert_eq!(chrono_utc(0), "1970-01-01T00:00:00Z");
-        assert_eq!(chrono_utc(1_767_225_600 + 86_399), "2026-01-01T23:59:59Z");
-        assert_eq!(chrono_utc(951_782_400), "2000-02-29T00:00:00Z");
+        let utc = |s| jiff::Timestamp::from_second(s).unwrap().to_string();
+        assert_eq!(utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc(1_767_225_600 + 86_399), "2026-01-01T23:59:59Z");
+        assert_eq!(utc(951_782_400), "2000-02-29T00:00:00Z");
     }
 
     #[test]

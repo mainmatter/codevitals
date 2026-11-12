@@ -17,6 +17,7 @@ clap = { version = "4.6.7", features = ["derive", "string"] }
 crossterm = "0.29.0"
 duckdb = { version = "1.20000.1", features = ["appender-arrow", "bundled", "json"] }
 gix = "0.90.0"
+jiff = "0.2.42"
 petgraph = { version = "0.8.3", default-features = false }
 rayon = "1.12.0"
 tracing = "0.1.44"
