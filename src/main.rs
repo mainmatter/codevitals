@@ -18,7 +18,7 @@ mod attributes;
 mod db;
 mod diff;
 mod graph;
-#[allow(dead_code)] // used by `cv label` and `cv validate`
+mod label;
 mod labels;
 mod metrics;
 mod parse;
@@ -83,6 +83,19 @@ enum Cli {
         top: usize,
         #[arg(long, value_enum, default_value_t = diff::Format::Text)]
         format: diff::Format,
+    },
+    /// Judge pairs of functions side by side: which would you rather have to change?
+    /// Left, right, or can't tell; q quits, and the next session resumes. Judgments
+    /// are appended to the labels file; your git user.email names you as rater.
+    Label {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Repository the functions are read from.
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        /// Labels file (JSON Lines) to append to.
+        #[arg(long, default_value = "codevitals-labels.jsonl")]
+        labels: PathBuf,
     },
     /// Export the production files and functions at one scanned commit, with the
     /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
@@ -179,6 +192,17 @@ fn main() -> Result<()> {
                 true => println!("{out}"),
                 false => print!("{out}"),
             }
+        }
+        Cli::Label {
+            db: path,
+            repo,
+            labels,
+        } => {
+            let repo = gix::discover(&repo)
+                .with_context(|| format!("open the git repository containing {repo:?}"))?;
+            let mut db = open_scanned(&path)?;
+            let made = label::run(&repo, &mut db, &labels)?;
+            eprintln!("{made} judgments added to {}", labels.display());
         }
         Cli::Units {
             db: path,

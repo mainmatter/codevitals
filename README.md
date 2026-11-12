@@ -19,6 +19,7 @@ cv metrics --help          # list the metrics
 cv units units.json        # the production files and functions behind them, at the newest commit
 cv diff main~10 main       # each metric's change over a range, and the functions and files behind it
 cv hotspots                # files ranked by recent changes times decision points
+cv label                   # judge pairs of functions: which would you rather have to change?
 ```
 
 `cv diff` needs no scan: it parses the blobs the database lacks (with a scan that
