@@ -54,6 +54,18 @@ enum Cli {
         #[arg(value_name = "METRIC")]
         names: Vec<String>,
     },
+    /// Compute the experimental metrics (schema `experimental`): candidates without
+    /// supporting evidence yet, kept out of `metrics` and the dashboard. One JSON
+    /// object, as `metrics` writes.
+    Experimental {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// File to write, replaced atomically; `-` writes to stdout.
+        output: PathBuf,
+        /// Metrics to compute; all of them when omitted.
+        #[arg(value_name = "METRIC")]
+        names: Vec<String>,
+    },
     /// Report how each metric changes from BASE to HEAD, and the functions and files
     /// that account for the change, largest contribution first. Needs no scan: blobs
     /// the database lacks are parsed (with a scan that reached BASE, only those that
@@ -177,6 +189,23 @@ fn main() -> Result<()> {
             let json = metrics::export(&mut db, &names)?;
             write(&output, json)?;
             info!(?output, "metrics written");
+        }
+        Cli::Experimental {
+            db: path,
+            output,
+            names,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let all = metrics::list_in(&db, "experimental")?;
+            if let Some(unknown) = names.iter().find(|n| !all.contains(n)) {
+                anyhow::bail!(
+                    "{unknown:?} is no experimental metric; they are: {}",
+                    all.join(", ")
+                );
+            }
+            let names = if names.is_empty() { all } else { names };
+            let json = metrics::export_in(&mut db, "experimental", &names)?;
+            write(&output, json)?;
         }
         Cli::Diff {
             base,

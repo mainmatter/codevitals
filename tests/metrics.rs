@@ -880,3 +880,28 @@ fn modularity_violations_need_no_import() {
         "(3,0.6667,2,3,1.0)",
     );
 }
+
+/// Experimental clones: a function copied with other names is duplicated code.
+#[test]
+fn experimental_clones() {
+    let body = |f: &str, v: &str| {
+        format!(
+            "fn {f}(items: &[i32], {v}: i32) -> i32 {{\n    let mut total = 0;\n    for item in items {{\n        if *item > {v} {{ total += item * 2; }} else {{ total -= 1; }}\n        if *item == {v} {{ return total; }}\n    }}\n    total + {v} * 3\n}}\n"
+        )
+    };
+    let mut r = common::Repo::new();
+    r.write("a.rs", body("sum", "limit"));
+    r.commit("main", "c0\n", 0, &[]);
+    r.write("b.rs", body("total_over", "bound"));
+    r.extend("copy\n", 1);
+    scan(&r.dir, "main");
+    // Read at the tip (both commits fall in one week). Winnowed fingerprints cover most,
+    // not all, of a repeated run.
+    assert_rows(
+        &r.dir,
+        "select seq, value > 0.5, value <= 1, duplicated_tokens > 0 from experimental.clones order by seq",
+        "(1,true,true,true)",
+    );
+    let out = succeeds(&r.dir, &["experimental", "-", "clones"]);
+    assert!(out.starts_with(r#"{"clones":[{"seq":1,"#), "{out}");
+}

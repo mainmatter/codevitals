@@ -43,6 +43,14 @@ pub fn list(db: &Connection) -> Result<Vec<String>> {
     Ok(catalog(db)?.into_iter().map(|(name, _)| name).collect())
 }
 
+/// Every view's name in `schema` (`metrics` or `experimental`), in definition order.
+pub fn list_in(db: &Connection, schema: &str) -> Result<Vec<String>> {
+    Ok(views(db, schema)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect())
+}
+
 /// Metric names for clap, so `--help` lists every metric with its title: the first
 /// line of its comment (`CATEGORY: Title`), without parenthetical asides, which the
 /// dashboard keeps.
@@ -95,6 +103,11 @@ pub fn cache_helpers(db: &mut Connection) -> Result<()> {
 
 /// One JSON object mapping each metric in `names` to its rows, each with the commit `time` (ISO 8601 UTC) after `seq`.
 pub fn export(db: &mut Connection, names: &[String]) -> Result<String> {
+    export_in(db, "metrics", names)
+}
+
+/// As `export`, for the views of `schema`.
+pub fn export_in(db: &mut Connection, schema: &str, names: &[String]) -> Result<String> {
     cache_helpers(db)?;
     let (code_commits, windows, size, weeks): (i64, i64, i64, i64) = db.query_row(
         "select (select count(*) from code_commits), (select count(distinct win) from windows),
@@ -118,7 +131,7 @@ pub fn export(db: &mut Connection, names: &[String]) -> Result<String> {
         let started = Instant::now();
         let rows = format!(
             "select m.seq, strftime(c.time, '%Y-%m-%dT%H:%M:%SZ') as time, m.* exclude (seq)
-             from metrics.{m} m join commit_times c using (seq) order by m.seq"
+             from {schema}.{m} m join commit_times c using (seq) order by m.seq"
         );
         let (count, json): (usize, String) = db
             .query_row(

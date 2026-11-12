@@ -18,7 +18,7 @@ fn render(spans: &[Span]) -> String {
     let opt = |v: Option<i32>| v.map_or("NULL".into(), |v| v.to_string());
     spans
         .iter()
-        .filter(|s| !STRUCTURE.contains(&s.kind))
+        .filter(|s| !STRUCTURE.contains(&s.kind) && s.kind != "fingerprint")
         .map(|s| {
             let name = s.name.as_deref().unwrap_or("NULL");
             let (p, e) = (opt(s.params), opt(s.errors));
@@ -578,6 +578,34 @@ fn panics_by_intent() {
         kinds("x.c", "void f(void) { assert(x > 0); abort(); }"),
         "invariant:"
     );
+}
+
+/// Clone fingerprints: a run of 60+ tokens repeated with other names and literals
+/// shares a fingerprint with the original; unrelated code does not.
+#[test]
+fn clone_fingerprints() {
+    let body = |f: &str, v: &str| {
+        format!(
+            "fn {f}(items: &[i32], {v}: i32) -> i32 {{\n    let mut total = 0;\n    for item in items {{\n        if *item > {v} {{ total += item * 2; }} else {{ total -= 1; }}\n        if *item == {v} {{ return total; }}\n    }}\n    total + {v} * 3\n}}\n"
+        )
+    };
+    let fps = |src: &str| -> std::collections::HashSet<u64> {
+        extract(Lang::of("x.rs").unwrap(), src.as_bytes())
+            .into_iter()
+            .filter(|s| s.kind == "fingerprint")
+            .map(|s| s.hash)
+            .collect()
+    };
+    let a = fps(&body("sum", "limit"));
+    let b = fps(&body("total_over", "bound"));
+    let c = fps(
+        "struct Config { name: String, size: usize }\nimpl Config { fn new() -> Config { Config { name: String::new(), size: 0 } } }\n",
+    );
+    assert!(
+        !a.is_empty() && a.is_subset(&b) && b.is_subset(&a),
+        "{a:?} {b:?}"
+    );
+    assert!(a.is_disjoint(&c));
 }
 
 /// Empty input gives one `file` span in every language (compiling every query, which

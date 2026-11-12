@@ -22,4 +22,6 @@ pub const SQL: &str = concat!(
     include_str!("../sql/units.sql"),
     "\n",
     include_str!("../sql/metrics.sql"),
+    "\n",
+    include_str!("../sql/experimental.sql"),
 );

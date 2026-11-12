@@ -188,6 +188,7 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
     // form a stack of end offsets: a span's depth is how many of them are still open.
     let mut open = HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
+    out.extend(fingerprints(lang, src, &leaves));
     for ((_, _, kind), captured) in spans {
         let Captured {
             start: (start, start_point),
@@ -228,6 +229,76 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         }
     }
     out
+}
+
+/// Tokens per hashed window of the clone fingerprints (k), and windows per winnowing
+/// window (w). A fingerprint two places share is a run of CLONE_K (50) tokens that
+/// repeats, names and literals ignored (only node kinds are hashed); every repeated
+/// run of at least `CLONE_K + CLONE_W - 1` (60) tokens shares one (Schleimer,
+/// Wilkerson and Aiken's winnowing).
+pub const CLONE_K: usize = 50;
+pub const CLONE_W: usize = 11;
+
+/// `fingerprint` spans: the winnowed hashes of every CLONE_K-token window of the
+/// code leaves, each over the bytes of its window, `tokens` CLONE_K.
+fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<Span> {
+    // Manifests (selected by file name, no extension) are no code.
+    if leaves.len() < CLONE_K || lang.exts.is_empty() {
+        return vec![];
+    }
+    let hashes: Vec<u64> = leaves
+        .windows(CLONE_K)
+        .map(|w| {
+            let mut bytes = lang.name.as_bytes().to_vec();
+            for l in w {
+                bytes.extend(l.2.to_le_bytes());
+            }
+            xxh3_64(&bytes)
+        })
+        .collect();
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(
+            src.iter()
+                .enumerate()
+                .filter(|(_, b)| **b == b'\n')
+                .map(|(i, _)| i + 1),
+        )
+        .collect();
+    let line = |byte: usize| int(line_starts.partition_point(|&s| s <= byte));
+    let mut picked: Vec<usize> = Vec::new();
+    let w = CLONE_W.min(hashes.len());
+    for start in 0..=hashes.len() - w {
+        // The rightmost minimum of the window.
+        let mut best = start;
+        for i in start..start + w {
+            if hashes[i] <= hashes[best] {
+                best = i;
+            }
+        }
+        if picked.last() != Some(&best) {
+            picked.push(best);
+        }
+    }
+    picked
+        .into_iter()
+        .map(|i| {
+            let (start, end) = (leaves[i].0, leaves[i + CLONE_K - 1].1);
+            Span {
+                kind: "fingerprint",
+                name: None,
+                line: line(start),
+                end_line: line(end.saturating_sub(1).max(start)),
+                tokens: int(CLONE_K),
+                comments: 0,
+                params: None,
+                hash: hashes[i],
+                errors: None,
+                start_byte: int(start),
+                end_byte: int(end),
+                depth: 0,
+            }
+        })
+        .collect()
 }
 
 /// When code is test code: a disjunction of conjunctions of feature names.

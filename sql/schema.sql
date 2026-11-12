@@ -2,6 +2,9 @@
 create table if not exists codevitals (schema integer, extractor integer);
 -- The metric views (metrics.sql).
 create schema if not exists metrics;
+-- Candidate metrics without supporting evidence yet (experimental.sql), kept off
+-- the dashboard; `cv validate` decides which graduate.
+create schema if not exists experimental;
 -- Per-file and per-function values behind the metrics (units.sql).
 create schema if not exists units;
 
