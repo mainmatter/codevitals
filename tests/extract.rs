@@ -586,7 +586,7 @@ fn panics_by_intent() {
     );
 }
 
-/// Clone fingerprints: a run of 60+ tokens repeated with other names and literals
+/// Clone fingerprints: a run of 70+ tokens repeated with other names and literals
 /// shares a fingerprint with the original; unrelated code does not.
 #[test]
 fn clone_fingerprints() {

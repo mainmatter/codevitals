@@ -92,16 +92,25 @@ where not exists (
     and b.start_byte <= a.start_byte and b.end_byte >= a.end_byte
     and (b.start_byte < a.start_byte or b.end_byte > a.end_byte));
 
--- Spans of production code: every span outside the blob's test ranges (the `file`
--- span always stays), per blob and declared test features.
+-- The spans of `kinds` outside the test ranges of their blob (a `file` span always
+-- stays), per blob and declared test features. A left anti-join: a correlated
+-- `not exists` plans as heavy mark joins.
+create or replace macro production_spans(kinds) as table
+select s.* exclude (end_byte_t)
+from (select i.test_features, s.*, t.end_byte as end_byte_t
+      from blob_inputs i join spans s on s.blob = i.blob
+      left join test_ranges t on s.kind <> 'file' and t.blob = s.blob
+        and t.test_features = i.test_features
+        and t.start_byte <= s.start_byte and s.end_byte <= t.end_byte
+      where list_contains(kinds, s.kind)) s
+where end_byte_t is null;
+
+-- The production spans the facts read (function_facts, blob_facts and the
+-- experimental metrics); calls, blocks and imports are left out, as they are many.
 create or replace view code_spans as
-select i.test_features, s.*
-from blob_inputs i join spans s on s.blob = i.blob
-where s.kind not in ('test', 'test_if')
-  and (s.kind = 'file' or not exists (
-    select 1 from test_ranges t
-    where t.blob = s.blob and t.test_features = i.test_features
-      and t.start_byte <= s.start_byte and s.end_byte <= t.end_byte));
+select * from production_spans(['file', 'fn', 'scope', 'module', 'branch', 'condition', 'throw',
+  'goto', 'global_state', 'invariant', 'unhandled', 'unfinished', 'forward', 'doc', 'vocabulary',
+  'marker']);
 
 -- Each path's role, from its newest version: what .gitattributes declare (`code`:
 -- first-party whatever the conventions), else conventions, case aside.

@@ -190,7 +190,9 @@ pub fn export_in(db: &mut Connection, schema: &str, names: &[String]) -> Result<
         );
         let (count, json): (usize, String) = db
             .query_row(
-                &format!("select count(*), coalesce(json_group_array(t), '[]') from ({rows}) t"),
+                &format!(
+                    "select count(*), coalesce(to_json(list(t order by t.seq)), '[]') from ({rows}) t"
+                ),
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )

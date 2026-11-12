@@ -19,6 +19,11 @@ const SLOW_BLOB: Duration = Duration::from_secs(1);
 pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     let started = Instant::now();
     let stale = db.execute("delete from spans where v <> ?", [V])?;
+    // Fingerprints of blobs whose spans are gone are reparsed with them.
+    db.execute(
+        "delete from fingerprints where blob not in (select blob from spans)",
+        [],
+    )?;
     db.execute_batch(&format!(
         "delete from codevitals; insert into codevitals values ({SCHEMA}, {V})"
     ))?;
@@ -110,12 +115,22 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
     while parsed.peek().is_some() {
         let tx = db.transaction()?;
         let mut spans = tx.appender("spans")?;
+        let mut fingerprints = tx.appender("fingerprints")?;
         for (blob, lang, content) in parsed.by_ref().take(BATCH) {
             written += 1;
             // Blobs that are not parsed get rows with NULL counts.
             let unparsed: &[&str] = match content {
                 Content::Code(extracted) => {
                     for s in extracted {
+                        if s.kind == "fingerprint" {
+                            fingerprints.append_row(params![
+                                blob,
+                                s.hash,
+                                s.start_byte,
+                                s.end_byte
+                            ])?;
+                            continue;
+                        }
                         spans.append_row(params![
                             blob,
                             V,
@@ -127,7 +142,7 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
                             s.tokens,
                             s.comments,
                             s.params,
-                            s.hash,
+                            (s.kind == "fn").then_some(s.hash),
                             s.errors,
                             s.start_byte,
                             s.end_byte,
@@ -148,7 +163,8 @@ fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> R
             }
         }
         spans.flush()?;
-        drop(spans);
+        fingerprints.flush()?;
+        drop((spans, fingerprints));
         tx.commit()?;
         info!("parse: {written}/{total} blobs");
     }

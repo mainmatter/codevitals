@@ -42,6 +42,10 @@ create table if not exists labels (
   b_blob text, b_start integer, b_end integer, b_path text,
   choice text, ms integer, a_commits integer, b_commits integer, repeat_of integer);
 
+-- Winnowed fingerprints of runs of tokens, for clones (extract.rs `fingerprints`):
+-- many per blob, so kept apart from `spans`.
+create table if not exists fingerprints (blob text, hash ubigint, start_byte integer, end_byte integer);
+
 -- Derived from import_edges by graph.rs, not a fact.
 create table if not exists cones (path text, since integer, until integer, cone integer, scc integer);
 

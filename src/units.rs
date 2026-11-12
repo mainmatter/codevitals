@@ -24,9 +24,9 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
     let rows = |view: &str, order: &str| -> Result<String> {
         Ok(db.query_row(
             &format!(
-                "select coalesce(json_group_array(t), '[]') from (
+                "select coalesce(to_json(list(t order by {order})), '[]') from (
                    select * exclude (since, until) from units.{view}
-                   where since <= $1 and $1 < until order by {order}) t"
+                   where since <= $1 and $1 < until) t"
             ),
             params![seq],
             |r| r.get(0),
@@ -49,7 +49,9 @@ pub fn hotspots(db: &mut Connection, top: usize, format: Format) -> Result<Strin
         format!("select * from units.hotspots where score > 0 order by rank, path limit {top}");
     if matches!(format, Format::Json) {
         let files: String = db.query_row(
-            &format!("select coalesce(json_group_array(t), '[]') from ({query}) t"),
+            &format!(
+                "select coalesce(to_json(list(t order by t.rank, t.path)), '[]') from ({query}) t"
+            ),
             [],
             |r| r.get(0),
         )?;

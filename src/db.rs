@@ -7,9 +7,9 @@ use duckdb::{AccessMode, Connection, OptionalExt};
 use gix::ObjectId;
 
 /// Extractor version. Bump whenever `extract` output could change for any input.
-pub const V: i32 = 7;
+pub const V: i32 = 8;
 /// Database layout version. Bump whenever a table changes; older databases are refused.
-pub const SCHEMA: i32 = 6;
+pub const SCHEMA: i32 = 7;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its
 /// size, so batching dominates throughput; an interrupt loses at most one batch.
 pub const BATCH: usize = 500;
@@ -47,7 +47,8 @@ pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
             )
         })?;
         db.execute_batch(&format!(
-            "set memory_limit = '{MEMORY_LIMIT}'; set max_temp_directory_size = '{SPILL_LIMIT}'"
+            "set memory_limit = '{MEMORY_LIMIT}'; set max_temp_directory_size = '{SPILL_LIMIT}';
+             set preserve_insertion_order = false"
         ))?;
         Ok(db)
     };

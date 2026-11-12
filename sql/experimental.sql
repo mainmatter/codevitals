@@ -11,14 +11,17 @@ from reach_points p join code_versions v on v.since <= p.seq and p.seq < v.until
 
 -- Duplicated runs of production tokens. A fingerprint (extract.rs) that occurs twice
 -- is a repeated run of 50 tokens, names and literals ignored; every repeated run of
--- 60 or more has one. The bytes of duplicated fingerprints, merged per file and
+-- 70 or more has one. The bytes of duplicated fingerprints, merged per file and
 -- converted to tokens at the file's tokens per byte, approximate the duplicated tokens.
 create or replace view experimental.clones as
 with live as (select * from experimental_live),
+-- Fingerprints outside test code (a left anti-join on the test ranges).
 fps as (
-  select l.seq, l.path, s.hash, s.start_byte, s.end_byte
-  from live l join code_spans s on s.blob = l.blob and s.test_features = l.test_features
-  where s.kind = 'fingerprint'),
+  select l.seq, l.path, f.hash, f.start_byte, f.end_byte
+  from live l join fingerprints f on f.blob = l.blob
+  left join test_ranges t on t.blob = f.blob and t.test_features = l.test_features
+    and t.start_byte <= f.start_byte and f.end_byte <= t.end_byte
+  where t.blob is null),
 dup as (select * from fps qualify count(*) over (partition by seq, hash) > 1),
 ordered as (
   select *, max(end_byte) over (partition by seq, path order by start_byte, end_byte
@@ -48,7 +51,7 @@ comment on view experimental.clones is 'STRUCTURE: Duplicated token runs
 
 What: the share of production tokens in runs of 50 or more tokens that occur more than once, names and literals ignored, within or across files, each week (value), the duplicated tokens, and per language (c, rust, python, ecma). Lower is better.
 
-Read: 0.08 means 8% of the code repeats elsewhere. Approximate: runs are found by winnowed fingerprints (sure from 60 tokens) and measured in bytes.
+Read: 0.08 means 8% of the code repeats elsewhere. Approximate: runs are found by winnowed fingerprints (sure from 70 tokens) and measured in bytes.
 
 Trend: rising means copy-paste. Cloning was among the strongest predictors of expert maintainability ratings in Schnappinger et al. (ICPC 2019, three Java systems); on their later public dataset class and method size predicted best. Unvalidated.';
 
@@ -86,8 +89,9 @@ Trend: rising means more layers that add a name but no behaviour. Unvalidated.';
 create or replace view experimental_single_use as
 with calls as (
   select l.seq, s.name, count(*) as calls
-  from experimental_live l join code_spans s on s.blob = l.blob and s.test_features = l.test_features
-  where s.kind = 'call' group by all),
+  from experimental_live l join production_spans(['call']) s
+    on s.blob = l.blob and s.test_features = l.test_features
+  group by all),
 defs as (select seq, name, count(*) as defs from experimental_functions group by all)
 select f.seq, f.path, f.qualified, f.name, f.tokens, f.public, f.blob, f.start_byte, f.end_byte,
        not f.public and d.defs = 1 and coalesce(c.calls, 0) = 1 as single_use

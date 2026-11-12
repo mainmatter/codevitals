@@ -202,7 +202,8 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
          select l.choice, a.blob is not null and b.blob is not null, {}
          from labels l
          left join f a on a.blob = l.a_blob and a.start_byte = l.a_start and a.end_byte = l.a_end
-         left join f b on b.blob = l.b_blob and b.start_byte = l.b_start and b.end_byte = l.b_end",
+         left join f b on b.blob = l.b_blob and b.start_byte = l.b_start and b.end_byte = l.b_end
+         order by l.rater, l.n",
         METRICS.join("', '"),
         columns.join(", ")
     );

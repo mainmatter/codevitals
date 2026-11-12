@@ -18,6 +18,7 @@ pub struct Span {
     pub tokens: i32,
     pub comments: i32,
     pub params: Option<i32>,
+    /// A `fn`'s structural hash (node kinds, not names); a fingerprint's hash; else 0.
     pub hash: u64,
     pub errors: Option<i32>,
     /// Byte range in the source, so SQL can test containment between spans.
@@ -145,10 +146,14 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         let lo = leaves.partition_point(|l| l.0 < bytes.start);
         let hi = leaves.partition_point(|l| l.1 <= bytes.end);
         let inside = &leaves[lo..hi];
-        let mut hashed = lang.name.as_bytes().to_vec();
-        for l in inside {
-            hashed.extend(l.2.to_le_bytes());
-        }
+        // The structural hash, of functions only: nothing reads other spans'.
+        let hash = (kind == "fn").then(|| {
+            let mut hashed = lang.name.as_bytes().to_vec();
+            for l in inside {
+                hashed.extend(l.2.to_le_bytes());
+            }
+            xxh3_64(&hashed)
+        });
         let line = start.row + 1;
         let end_line = if end.column == 0 {
             end.row
@@ -171,7 +176,7 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
                 .map(|(_, words)| words)
                 .sum()),
             params: None,
-            hash: xxh3_64(&hashed),
+            hash: hash.unwrap_or(0),
             errors: None,
         }
     };
@@ -457,10 +462,10 @@ fn subtokens(text: &str) -> std::collections::HashSet<String> {
 /// Tokens per hashed window of the clone fingerprints (k), and windows per winnowing
 /// window (w). A fingerprint two places share is a run of CLONE_K (50) tokens that
 /// repeats, names and literals ignored (only node kinds are hashed); every repeated
-/// run of at least `CLONE_K + CLONE_W - 1` (60) tokens shares one (Schleimer,
+/// run of at least `CLONE_K + CLONE_W - 1` (70) tokens shares one (Schleimer,
 /// Wilkerson and Aiken's winnowing).
 pub const CLONE_K: usize = 50;
-pub const CLONE_W: usize = 11;
+pub const CLONE_W: usize = 21;
 
 /// `fingerprint` spans: the winnowed hashes of every CLONE_K-token window of the
 /// code leaves, each over the bytes of its window, `tokens` CLONE_K.
