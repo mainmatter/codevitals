@@ -77,8 +77,16 @@ pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
 /// they need rebuilding, are rebuilt on another connection in the background (most of
 /// a second of binding), to be waited for with `Views::finish` before exiting.
 pub fn open_for_scan(path: &Path) -> Result<(Connection, Option<Views>)> {
-    open_with(path, AccessMode::ReadWrite, true)
+    let (db, views) = open_with(path, AccessMode::ReadWrite, true)?;
+    // A scan appends millions of rows. Past the threshold of write-ahead log, a
+    // commit checkpoints (compresses and writes every changed row group): at
+    // DuckDB's 16 MB, many times during the parse. Once, on close, is enough.
+    db.execute_batch(&format!("set checkpoint_threshold = '{SCAN_CHECKPOINT}'"))?;
+    Ok((db, views))
 }
+
+/// Write-ahead log a scan accumulates before checkpointing.
+const SCAN_CHECKPOINT: &str = "1GB";
 
 /// Views being rebuilt in the background.
 pub struct Views(std::thread::JoinHandle<Result<()>>);
