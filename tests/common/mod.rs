@@ -2,8 +2,9 @@
 //! building git repositories in process, and writing facts directly.
 #![allow(dead_code)] // each test file uses a different subset
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use gix::ObjectId;
 use gix::objs::tree::EntryKind;
@@ -15,9 +16,39 @@ pub fn cv(dir: &TempDir, args: &[&str]) -> Output {
     cmd.env("RUST_LOG", "off"); // stderr carries only the summary line
     cmd.args(args).arg("--db").arg(db(dir));
     if args[0] == "scan" {
+        from_template(dir);
         cmd.arg(dir.path().join("repo"));
     }
     cmd.output().unwrap()
+}
+
+/// An empty database with codevitals' SQL applied, made once and shared by every
+/// test: applying the SQL to a new database takes about a second, and nearly every
+/// test needs one.
+fn template() -> &'static Path {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let hash = codevitals::sql_hash();
+        let path = std::env::temp_dir().join(format!("codevitals-test-{hash}.duckdb"));
+        if !path.exists() {
+            // Written beside, then renamed: concurrent test runs never see half a file.
+            let partial = path.with_extension(format!("{}.partial", std::process::id()));
+            let conn = duckdb::Connection::open(&partial).unwrap();
+            conn.execute_batch(codevitals::SQL).unwrap();
+            conn.execute_batch(&format!("create macro codevitals_sql() as '{hash}'"))
+                .unwrap();
+            drop(conn);
+            std::fs::rename(&partial, &path).unwrap();
+        }
+        path
+    })
+}
+
+/// Gives `dir` the template database, unless it has a database already.
+pub fn from_template(dir: &TempDir) {
+    if !db(dir).exists() {
+        std::fs::copy(template(), db(dir)).unwrap();
+    }
 }
 
 /// Runs codevitals, which must succeed, and returns its stdout.
@@ -227,7 +258,7 @@ pub fn fixture_named(add: &str, plus: &str, d: &str) -> Repo {
 /// tests that write facts directly with `history`.
 pub fn facts(history: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
-    execute(&dir, codevitals::SQL);
+    from_template(&dir);
     execute(&dir, history);
     dir
 }

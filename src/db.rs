@@ -5,7 +5,6 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use duckdb::{AccessMode, Connection, OptionalExt};
 use gix::ObjectId;
-use xxhash_rust::xxh3::xxh3_64;
 
 /// Extractor version. Bump whenever `extract` output could change for any input.
 pub const V: i32 = 7;
@@ -54,7 +53,7 @@ pub fn open(path: &Path, access: AccessMode) -> Result<Connection> {
     };
     let mut db = connect(access.clone())?;
     check_version(&db, path)?;
-    let hash = format!("{:016x}", xxh3_64(codevitals::SQL.as_bytes()));
+    let hash = codevitals::sql_hash();
     let applied: Option<String> = db
         .query_row(
             "select function_name from duckdb_functions() where function_name = 'codevitals_sql'",

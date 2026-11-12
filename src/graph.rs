@@ -34,8 +34,16 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
         let next = ids.len();
         *ids.entry(name).or_insert(next)
     };
-    let events: Vec<(i32, i32, usize, usize, usize)> = db
-        .prepare(
+    // Planning the import views costs most of a second: skip them without imports.
+    let imports: bool = db.query_row(
+        "select exists (select 1 from spans where kind = 'import')",
+        [],
+        |r| r.get(0),
+    )?;
+    let events: Vec<(i32, i32, usize, usize, usize)> = if !imports {
+        Vec::new()
+    } else {
+        db.prepare(
             "select since, 1, source, target, family(source) from import_edges
              union all select until, -1, source, target, family(source) from import_edges
              order by 1",
@@ -49,7 +57,8 @@ pub fn derive(db: &mut Connection, into: Cones) -> Result<()> {
                 intern(&mut families, r.get(4)?),
             ))
         })?
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, _>>()?
+    };
     let mut names = vec![String::new(); files.len()];
     for (name, id) in files {
         names[id] = name;

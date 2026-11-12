@@ -25,3 +25,9 @@ pub const SQL: &str = concat!(
     "\n",
     include_str!("../sql/experimental.sql"),
 );
+
+/// The hash of `SQL` a database records (`codevitals_sql()`) once its views and
+/// macros are those of this codevitals.
+pub fn sql_hash() -> String {
+    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(SQL.as_bytes()))
+}

@@ -95,8 +95,14 @@ impl Lang {
     /// The compiled query, memoized: compiling costs up to 13 ms (C++), far more
     /// than parsing a typical file. It depends only on `LANGS`, so `extract` stays pure.
     pub(crate) fn compiled_query(self) -> &'static Query {
-        static QUERIES: OnceLock<Vec<Query>> = OnceLock::new();
-        let queries = QUERIES.get_or_init(|| {
+        // One cell per language, compiled on first use: a scan of one language pays for
+        // its query only.
+        static QUERIES: [OnceLock<Query>; LANGS.len()] = [const { OnceLock::new() }; LANGS.len()];
+        let i = LANGS
+            .iter()
+            .position(|l| l.name == self.name)
+            .expect("lang is in LANGS");
+        QUERIES[i].get_or_init(|| {
             let compile = |l: &Lang| {
                 let query = Query::new(&(l.grammar)(), l.query).expect("query compiles");
                 for capture in query.capture_names() {
@@ -110,11 +116,7 @@ impl Lang {
                 }
                 query
             };
-            LANGS.iter().map(compile).collect()
-        });
-        &queries[LANGS
-            .iter()
-            .position(|l| l.name == self.name)
-            .expect("lang is in LANGS")]
+            compile(&LANGS[i])
+        })
     }
 }
