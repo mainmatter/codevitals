@@ -125,50 +125,6 @@ Read: 0.6 means 60% of function code is internal. Visibility is written differen
 
 Trend: falling means the public surface grows faster than the code behind it.';
 
--- Change points per structure: each change adds its new contribution, removes its old.
-create or replace view metrics.duplication as
-with f as (
-  select v.since, v.until, s.lang, s.hash, s.tokens
-  from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join code_spans s on s.blob = v.blob and s.test_features = v.test_features
-    and s.kind = 'fn' and s.tokens >= clone_tokens()),
-d as (
-  select lang, hash, seq, sum(n) as n, sum(t) as t
-  from (select lang, hash, since as seq, 1 as n, tokens as t from f
-        union all select lang, hash, until, -1, -tokens from f)
-  group by all),
-structures as (
-  select lang, hash, seq, t, if(n > 1, t, 0) as duplicated from (
-    select lang, hash, seq, sum(n) over w as n, sum(t) over w as t
-    from d window w as (partition by lang, hash order by seq))),
-changes as (
-  select lang, seq, sum(duplicated - previous_duplicated) as duplicated, sum(t - previous_t) as tokens
-  from (select *, coalesce(lag(duplicated) over w, 0) as previous_duplicated,
-               coalesce(lag(t) over w, 0) as previous_t
-        from structures window w as (partition by lang, hash order by seq))
-  group by lang, seq),
-running as (
-  select lang, seq, sum(duplicated) over w as duplicated, sum(tokens) over w as tokens
-  from changes window w as (partition by lang order by seq)),
-grid as (select c.seq, l.lang from commits c, (select distinct lang from running) l),
-totals as (
-  select g.seq, g.lang, r.duplicated, r.tokens
-  from grid g asof join running r on g.lang = r.lang and g.seq >= r.seq
-  where r.tokens > 0)
-select seq, sum(duplicated) / sum(tokens) as value,
-       map(list(lang order by lang), list(duplicated / tokens order by lang)) as by_language,
-       family_ratio(duplicated, tokens, lang, 'c') as c, family_ratio(duplicated, tokens, lang, 'rust') as rust,
-       family_ratio(duplicated, tokens, lang, 'python') as python, family_ratio(duplicated, tokens, lang, 'ecma') as ecma
-from totals group by seq;
-
-comment on view metrics.duplication is 'STRUCTURE: Duplicated code share
-
-What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.
-
-Read: 0.05 means 5% of it has a structural twin.
-
-Trend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.';
-
 create or replace view metrics.concentration as
 select seq, sum(large_tokens) / sum(fn_tokens) as value,
        map(list(lang order by lang), list(large_tokens / fn_tokens order by lang)) as by_language,

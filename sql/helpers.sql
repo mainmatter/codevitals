@@ -5,7 +5,6 @@ create or replace macro window_commits() as 100; -- code-touching commits per tr
 create or replace macro window_max_weeks() as 26; -- windows spanning longer are not reported
 create or replace macro max_commit_files() as 30; -- larger commits are bulk changes, left out of process metrics
 create or replace macro rework_days() as 7;     -- days within which a repeat change counts as rework
-create or replace macro clone_tokens() as 50;   -- smallest function counted by duplication
 create or replace macro large_tokens() as 200;  -- functions above this count toward concentration
 create or replace macro deep_nesting() as 3;    -- functions nested deeper than this count as deeply nested
 create or replace macro many_decisions() as 10;  -- functions with more decision points count as branchy

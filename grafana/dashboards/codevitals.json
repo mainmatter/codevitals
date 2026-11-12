@@ -1501,7 +1501,7 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 64
       },
@@ -1581,94 +1581,6 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "Duplicated code share ↓",
-      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 8,
-        "y": 64
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.duplication",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Duplicated code share",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duplicated code share"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "text"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": false,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "type": "timeseries",
       "title": "Code in large functions ↓",
       "description": "What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare each language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
       "datasource": {
@@ -1677,8 +1589,8 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 8,
-        "x": 16,
+        "w": 12,
+        "x": 12,
         "y": 64
       },
       "targets": [
@@ -1755,7 +1667,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 20,
       "type": "row",
       "title": "Code structure (by language)",
       "collapsed": false,
@@ -1768,7 +1680,7 @@
       "panels": []
     },
     {
-      "id": 22,
+      "id": 21,
       "type": "timeseries",
       "title": "Encapsulated code share (by language) ↑",
       "description": "What: the share of function code in non-public functions (no pub, static, not exported, leading underscore), overall and per language (c, rust, python, ecma). Higher is better.\n\nRead: 0.6 means 60% of function code is internal. Visibility is written differently per language: compare each language over time, not languages with each other.\n\nTrend: falling means the public surface grows faster than the code behind it.",
@@ -1778,7 +1690,7 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 74
       },
@@ -1798,6 +1710,154 @@
           },
           "parser": "backend",
           "root_selector": "$.encapsulation",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "c",
+              "text": "C/C++",
+              "type": "number"
+            },
+            {
+              "selector": "rust",
+              "text": "Rust",
+              "type": "number"
+            },
+            {
+              "selector": "python",
+              "text": "Python",
+              "type": "number"
+            },
+            {
+              "selector": "ecma",
+              "text": "JS/TS",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "C/C++"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rust"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Python"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "JS/TS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Code in large functions (by language) ↓",
+      "description": "What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare each language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.concentration",
           "format": "timeseries",
           "columns": [
             {
@@ -1917,302 +1977,6 @@
     },
     {
       "id": 23,
-      "type": "timeseries",
-      "title": "Duplicated code share (by language) ↓",
-      "description": "What: the share of function code (functions of 50+ tokens) whose structure occurs more than once, ignoring names and literals, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.05 means 5% of it has a structural twin.\n\nTrend: rising means copy-paste instead of reuse. Whole-function clones only. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 8,
-        "y": 74
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.duplication",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "c",
-              "text": "C/C++",
-              "type": "number"
-            },
-            {
-              "selector": "rust",
-              "text": "Rust",
-              "type": "number"
-            },
-            {
-              "selector": "python",
-              "text": "Python",
-              "type": "number"
-            },
-            {
-              "selector": "ecma",
-              "text": "JS/TS",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "C/C++"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Rust"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Python"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "JS/TS"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#c98500"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 24,
-      "type": "timeseries",
-      "title": "Code in large functions (by language) ↓",
-      "description": "What: the share of function code in functions over 200 tokens, overall and per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.5 means half of it sits in large functions. Compare each language over time.\n\nTrend: rising means logic piles up in a few large functions. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 16,
-        "y": 74
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.concentration",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "c",
-              "text": "C/C++",
-              "type": "number"
-            },
-            {
-              "selector": "rust",
-              "text": "Rust",
-              "type": "number"
-            },
-            {
-              "selector": "python",
-              "text": "Python",
-              "type": "number"
-            },
-            {
-              "selector": "ecma",
-              "text": "JS/TS",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "C/C++"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#3987e5"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Rust"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#d95926"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Python"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "JS/TS"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#c98500"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 25,
       "type": "row",
       "title": "Local complexity",
       "collapsed": false,
@@ -2225,7 +1989,7 @@
       "panels": []
     },
     {
-      "id": 26,
+      "id": 24,
       "type": "timeseries",
       "title": "Decision points per function (90th percentile)",
       "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per production function: the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 10 (share).\n\nRead: 6 means nine in ten functions have at most 6 decision points. A tail value, so adding simple code elsewhere does not lower it.\n\nTrend: rising means the branchiest functions get branchier. Unvalidated.",
@@ -2341,7 +2105,7 @@
       }
     },
     {
-      "id": 27,
+      "id": 25,
       "type": "timeseries",
       "title": "Nesting depth per function (90th percentile)",
       "description": "What: the deepest block below the function body, per production function: the 90th percentile over functions (value), the deepest function (max), and the share of function code in functions nested more than 3 deep (share).\n\nRead: 2 means nine in ten functions nest at most two blocks below their body. Else-if chains stay flat.\n\nTrend: rising means the most deeply nested functions get deeper. Unvalidated.",
@@ -2457,7 +2221,7 @@
       }
     },
     {
-      "id": 28,
+      "id": 26,
       "type": "timeseries",
       "title": "Parameters per function (90th percentile)",
       "description": "What: parameters per production function (self included): the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 5 (share).\n\nRead: 4 means nine in ten functions take at most 4 parameters.\n\nTrend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.",
@@ -2573,7 +2337,7 @@
       }
     },
     {
-      "id": 29,
+      "id": 27,
       "type": "timeseries",
       "title": "Decision points per 100 tokens",
       "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.\n\nTrend: rising means more paths to understand and test per line. A density: adding plain code anywhere lowers it, and dividing by size does not remove size, so read function_decisions first. Unvalidated.",
@@ -2745,7 +2509,7 @@
       }
     },
     {
-      "id": 30,
+      "id": 28,
       "type": "timeseries",
       "title": "Block nesting below function body",
       "description": "What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. An average over all function code: read function_nesting first. Unvalidated.",
@@ -2917,7 +2681,7 @@
       }
     },
     {
-      "id": 31,
+      "id": 29,
       "type": "row",
       "title": "Non-local control flow and state",
       "collapsed": false,
@@ -2930,7 +2694,7 @@
       "panels": []
     },
     {
-      "id": 32,
+      "id": 30,
       "type": "timeseries",
       "title": "Global mutable state per 1,000 tokens",
       "description": "What: declarations of global mutable state per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare each language over time, not languages with each other.\n\nTrend: rising means behaviour depends on more state outside the code in view. Read the count beside the density: adding plain code lowers the density without removing any state.",
@@ -3130,7 +2894,7 @@
       }
     },
     {
-      "id": 33,
+      "id": 31,
       "type": "timeseries",
       "title": "Throws and panics per 1,000 tokens",
       "description": "What: non-local exits per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp. invariants, unhandled and unfinished split them by intent.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Read the count beside the density. Unvalidated.",
@@ -3330,7 +3094,7 @@
       }
     },
     {
-      "id": 34,
+      "id": 32,
       "type": "timeseries",
       "title": "Stated invariants per 1,000 tokens",
       "description": "What: assertions that state what must hold, per 1,000 production tokens (value), and their number (count), overall and per language (c, rust, python): Rust assert!, assert_eq!, assert_ne!, their debug_ forms and unreachable!; Python assert; C/C++ assert().\n\nRead: an invariant written down is checked where it is assumed. More is not worse: these panics are intended. Compare each language over time.\n\nTrend: falling while the code grows means fewer assumptions are stated. Unvalidated.",
@@ -3530,7 +3294,7 @@
       }
     },
     {
-      "id": 35,
+      "id": 33,
       "type": "timeseries",
       "title": "Fallible operations left unhandled per 1,000 tokens",
       "description": "What: Rust unwrap and expect calls per 1,000 production tokens (value), and their number (count).\n\nRead: each one panics instead of handling a failure. Syntax cannot tell an unwrap that cannot fail (a fixed regex, a lock) from one that can, so this counts both.\n\nTrend: rising means more failures turned into panics instead of handled. Unvalidated.",
@@ -3730,7 +3494,7 @@
       }
     },
     {
-      "id": 36,
+      "id": 34,
       "type": "timeseries",
       "title": "Unfinished code per 1,000 tokens",
       "description": "What: markers of code left unfinished per 1,000 production tokens (value), and their number (count), overall and per language (rust, python): Rust todo! and unimplemented!, Python raise NotImplementedError.\n\nRead: each panics when reached. Python's NotImplementedError also marks abstract methods, which are finished.\n\nTrend: rising means more paths left for later. Unvalidated.",
@@ -3930,7 +3694,7 @@
       }
     },
     {
-      "id": 37,
+      "id": 35,
       "type": "timeseries",
       "title": "goto per 1,000 C/C++ tokens",
       "description": "What: goto statements per 1,000 C/C++ tokens.\n\nRead: mostly the goto-cleanup idiom, which is benign: watch spikes, not the level.\n\nTrend: rising outside error cleanup means jumps that defeat top-to-bottom reading. Unvalidated.",
@@ -4018,7 +3782,7 @@
       }
     },
     {
-      "id": 38,
+      "id": 36,
       "type": "row",
       "title": "Dependencies through imports",
       "collapsed": false,
@@ -4031,7 +3795,7 @@
       "panels": []
     },
     {
-      "id": 39,
+      "id": 37,
       "type": "timeseries",
       "title": "Share of its language's code a file depends on ↓",
       "description": "What: the share of the other files of its language that a typical production file depends on, through its imports and theirs (its reach), each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 0.1 means a file depends on a tenth of its language's code. mean_reach and median_reach count files; largest_cycle is the largest group of files importing each other.\n\nTrend: rising means a change anywhere can affect, and requires understanding, more of the code (MacCormack et al.).",
@@ -4203,7 +3967,7 @@
       }
     },
     {
-      "id": 40,
+      "id": 38,
       "type": "timeseries",
       "title": "Distance imports reach (vs chance) ↓",
       "description": "What: how far through the directory tree imports reach, relative to chance, each week, per language (c, rust, python, ecma). Lower is better.\n\nRead: 1 means imports reach as far as if rewired at random; below 1, files mostly import their neighbours. edges is the number of importing file pairs.\n\nTrend: rising means code depends on code ever further away: the tree stops matching the structure. Moving files steps it.",
@@ -4391,7 +4155,7 @@
       }
     },
     {
-      "id": 41,
+      "id": 39,
       "type": "timeseries",
       "title": "How complete the dependency metrics are, per language",
       "description": "What: the share of each language's imports of this repository's own code that codevitals could follow to a file, each week (c, rust, python, ecma).\n\nRead: 1 means the dependency metrics see every import; 0.8 means they miss a fifth and read too low. fallback_share counts imports followed only to a crate root or __init__.py, which overstates reach.\n\nTrend: a drop means the dependency metrics became less complete, not that the code changed.",
@@ -4563,7 +4327,7 @@
       }
     },
     {
-      "id": 42,
+      "id": 40,
       "type": "timeseries",
       "title": "Files changed together without importing each other ↓",
       "description": "What: of the pairs of production files (one language) changed together by at least 3 commits in the last 100 code commits, the share where neither imports the other (value) and their number (violations), each week. import_coverage is beside it: imports codevitals cannot follow make pairs look unrelated and inflate this. Lower is better.\n\nRead: 0.6 means three in five tightly coupled pairs share no visible dependency: the coupling is hidden (a shared format, a protocol, copy-paste).\n\nTrend: rising means more change coupling the code structure does not show. Read it with import_coverage: a drop there raises this. Unvalidated.",

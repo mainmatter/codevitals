@@ -39,7 +39,7 @@ FAMILY_LABELS = {"c": "C/C++", "rust": "Rust", "python": "Python", "ecma": "JS/T
 ALL = "All languages"
 # Kept as one combined line in their own row, and repeated as one line per language
 # family (without the combined line) in a "(by language)" row right below it.
-BY_LANGUAGE = {"size", "change_entropy", "encapsulation", "duplication", "concentration"}
+BY_LANGUAGE = {"size", "change_entropy", "encapsulation", "concentration"}
 # Categorical series colours for Grafana's dark theme, in fixed order: blue, orange,
 # aqua, yellow (dataviz reference palette, dark steps). Checked against the dark
 # panel surface #181b1f for colour-vision-deficiency separation and contrast.

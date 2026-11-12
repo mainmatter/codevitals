@@ -55,12 +55,11 @@ fn metric_views() {
             "select seq, value, by_language from metrics.encapsulation",
             "(0,1.0,{rust=1.0}) (1,1.0,{rust=1.0}) (2,1.0,{rust=1.0}) (3,1.0,{rust=1.0})",
         ),
-        // No function exceeds 200 tokens, none reaches the 50 tokens duplication counts.
+        // No function exceeds 200 tokens.
         (
             "select seq, value from metrics.concentration",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
-        ("select count(*) as seq from metrics.duplication", "(0)"),
         // Window c0..c2: a.rs (c0, c1) and lineage src/b.rs, src/c.rs (c1, c2) each
         // changed only by t. Window c1..c3: only that lineage changes twice.
         (
@@ -156,7 +155,7 @@ fn export() {
     let all = succeeds(dir, &["metrics", "-"]);
     assert!(
         all.starts_with(r#"{"size":["#)
-            && all.contains(r#""duplication":[]"#)
+            && all.contains(r#""goto":[]"#)
             && all.contains(r#""by_language":{"rust":1.0}"#),
         "{all}"
     );
@@ -325,7 +324,6 @@ fn renaming_identifiers_changes_no_structural_metric() {
     for m in [
         "metrics.size",
         "metrics.encapsulation",
-        "metrics.duplication",
         "metrics.concentration",
     ] {
         let q = format!("select * from {m} order by seq");
@@ -389,7 +387,7 @@ fn blob_facts_count_structure() {
     assert_eq!(facts("x.c"), "(8,2,1,1,2.0,0)");
 }
 
-/// `code_totals` and `duplication`, built from change points, equal computing them
+/// `code_totals`, built from change points, equals computing it
 /// from the live files commit by commit, through additions, a modification that
 /// breaks a structural twin, a deletion and a rename.
 #[test]
@@ -419,23 +417,6 @@ fn change_points_match_per_commit_sums() {
     let expected = rows(&r.dir, naive);
     let actual = rows(&r.dir, "select * from code_totals order by all");
     assert_eq!(actual, expected);
-    let naive_duplication = "with g as (
-           select c.seq, s.lang, s.hash, sum(s.tokens) as t, count(*) as n
-           from commits c join files l on l.since <= c.seq and c.seq < l.until
-           join path_roles p on p.path = l.path and p.role = 'code'
-           join spans s on s.blob = l.blob and s.kind = 'fn' and s.tokens >= clone_tokens()
-           group by all)
-         select seq, coalesce(sum(t) filter (n > 1), 0) / sum(t) from g group by seq order by seq";
-    let duplication = rows(&r.dir, naive_duplication);
-    assert_rows(
-        &r.dir,
-        "select seq, value from metrics.duplication order by seq",
-        &duplication,
-    );
-    assert!(
-        duplication.contains("(4,1.0)") && duplication.contains("(6,0.0)"),
-        "{duplication}"
-    );
     // The per-function tails, from histograms by change points, equal the nearest-rank
     // 90th percentile, maximum and share over the live functions commit by commit.
     for (measure, threshold) in [
@@ -600,7 +581,7 @@ fn sql_covers_every_language() {
             names.len(),
             names.join(", ")
         ),
-        "(15,0)",
+        "(14,0)",
     );
     let sql = codevitals::SQL;
     let mut kinds = Vec::new();

@@ -354,7 +354,7 @@ fn roles_follow_attributes_then_conventions() {
 }
 
 /// Squashing history keeps the state metrics of the final tree: the same tree in one
-/// commit has the same size, encapsulation, duplication and concentration.
+/// commit has the same size, encapsulation and concentration.
 #[test]
 fn squashing_keeps_state_metrics_of_the_final_tree() {
     let full = fixture();
@@ -365,7 +365,6 @@ fn squashing_keeps_state_metrics_of_the_final_tree() {
     for m in [
         "metrics.size",
         "metrics.encapsulation",
-        "metrics.duplication",
         "metrics.concentration",
     ] {
         let latest = format!("select * exclude (seq) from {m} order by seq desc limit 1");

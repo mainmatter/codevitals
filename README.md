@@ -2,7 +2,7 @@
 
 codevitals tracks code health over a repository's history. It records every commit
 and parses every file version with tree-sitter into a DuckDB file, then computes
-metrics over it in SQL: size, complexity, duplication, how changes spread, and
+metrics over it in SQL: size, complexity, how changes spread, and
 how files depend on each other. Rust, C, C++, Python, TypeScript and JavaScript.
 
 ## Install

@@ -136,9 +136,6 @@ const SPECS: &[Spec] = &[
     },
 ];
 
-/// Metrics `diff` reports without contributions: their units are not additive.
-const WHOLE: &[&str] = &["duplication"];
-
 /// Tail metrics of a per-function measure (a column of `unit_rows`): not additive, so
 /// the functions listed are those whose measure changed most, by that change.
 const TAILS: &[(&str, &str)] = &[
@@ -228,16 +225,6 @@ pub fn diff(
             continue;
         }
         let Some(spec) = SPECS.iter().find(|s| s.metric == metric) else {
-            if WHOLE.contains(&metric.as_str()) && (b.is_some() || h.is_some()) {
-                changes.push(Change {
-                    metric,
-                    additive: false,
-                    base: b,
-                    head: h,
-                    functions: vec![],
-                    files: vec![],
-                });
-            }
             continue;
         };
         if b.is_none() && h.is_none() {
