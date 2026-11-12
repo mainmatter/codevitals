@@ -24,6 +24,7 @@ mod metrics;
 mod parse;
 mod thrash;
 mod units;
+mod util;
 mod validate;
 mod walk;
 
@@ -84,8 +85,8 @@ enum Cli {
         /// Contributions listed per metric, for functions and for files.
         #[arg(long, default_value_t = 10)]
         top: usize,
-        #[arg(long, value_enum, default_value_t = diff::Format::Json)]
-        format: diff::Format,
+        #[arg(long, value_enum, default_value_t = util::Format::Json)]
+        format: util::Format,
     },
     /// Rank the production files of the newest scanned commit by how often they
     /// changed recently times their decision points: where change meets complexity.
@@ -95,8 +96,8 @@ enum Cli {
         /// Files to list.
         #[arg(long, default_value_t = 20)]
         top: usize,
-        #[arg(long, value_enum, default_value_t = diff::Format::Text)]
-        format: diff::Format,
+        #[arg(long, value_enum, default_value_t = util::Format::Text)]
+        format: util::Format,
     },
     /// Judge pairs of functions side by side: which would you rather have to change?
     /// Left, right, or can't tell; q quits, and the next session resumes. Judgments
@@ -122,8 +123,8 @@ enum Cli {
         /// Labels file (JSON Lines) of `cv label`.
         #[arg(long, default_value = "codevitals-labels.jsonl")]
         labels: PathBuf,
-        #[arg(long, value_enum, default_value_t = diff::Format::Text)]
-        format: diff::Format,
+        #[arg(long, value_enum, default_value_t = util::Format::Text)]
+        format: util::Format,
     },
     /// Export the production files and functions at one scanned commit, with the
     /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
@@ -156,8 +157,7 @@ fn main() -> Result<()> {
             db: path,
             rev,
         } => {
-            let repo = gix::discover(&repo)
-                .with_context(|| format!("open the git repository containing {repo:?}"))?;
+            let repo = open_repo(&repo)?;
             let mut db = open(&path, AccessMode::ReadWrite)?;
             let (commits, changes) = walk::walk(&mut db, &path, &repo, &rev)?;
             let blobs = parse::parse(&mut db, &repo)?;
@@ -218,12 +218,8 @@ fn main() -> Result<()> {
             top,
             format,
         } => {
-            let repo = gix::discover(&repo)
-                .with_context(|| format!("open the git repository containing {repo:?}"))?;
-            print!("{}", diff::diff(&repo, &db, &base, &head, top, format)?);
-            if matches!(format, diff::Format::Json) {
-                println!();
-            }
+            let repo = open_repo(&repo)?;
+            emit(format, diff::diff(&repo, &db, &base, &head, top, format)?);
         }
         Cli::Hotspots {
             db: path,
@@ -231,20 +227,14 @@ fn main() -> Result<()> {
             format,
         } => {
             let mut db = open_scanned(&path)?;
-            let json = matches!(format, diff::Format::Json);
-            let out = units::hotspots(&mut db, top, json)?;
-            match json {
-                true => println!("{out}"),
-                false => print!("{out}"),
-            }
+            emit(format, units::hotspots(&mut db, top, format)?);
         }
         Cli::Label {
             db: path,
             repo,
             labels,
         } => {
-            let repo = gix::discover(&repo)
-                .with_context(|| format!("open the git repository containing {repo:?}"))?;
+            let repo = open_repo(&repo)?;
             let mut db = open_scanned(&path)?;
             let made = label::run(&repo, &mut db, &labels)?;
             eprintln!("{made} judgments added to {}", labels.display());
@@ -256,10 +246,11 @@ fn main() -> Result<()> {
         } => {
             let mut db = open_scanned(&path)?;
             let report = validate::validate(&mut db, &labels)?;
-            match format {
-                diff::Format::Json => println!("{}", report.json()),
-                diff::Format::Text => print!("{}", report.text()),
-            }
+            let out = match format {
+                util::Format::Json => report.json(),
+                util::Format::Text => report.text(),
+            };
+            emit(format, out);
         }
         Cli::Units {
             db: path,
@@ -272,6 +263,19 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prints a report: JSON on one line, text as it is (its lines end in newlines).
+fn emit(format: util::Format, out: String) {
+    match format {
+        util::Format::Json => println!("{out}"),
+        util::Format::Text => print!("{out}"),
+    }
+}
+
+/// The git repository containing `path`.
+fn open_repo(path: &std::path::Path) -> Result<gix::Repository> {
+    gix::discover(path).with_context(|| format!("open the git repository containing {path:?}"))
 }
 
 /// Opens an existing database with at least one scanned commit, read-only.

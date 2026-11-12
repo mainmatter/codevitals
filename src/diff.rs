@@ -24,7 +24,8 @@ use tracing::info;
 
 use crate::attributes::Attributes;
 use crate::thrash::Thrash;
-use crate::walk::{Row, diff_trees, path_text};
+use crate::util::{Format, json_number, json_text};
+use crate::walk::{Row, commit, diff_trees, path_text};
 
 /// The experimental edit thrash of the range: lines added and deleted again by its
 /// first-parent commits; `null` when BASE is not on HEAD's first-parent chain.
@@ -45,95 +46,48 @@ fn thrash_json(t: Option<&Thrash>) -> String {
 /// metric's values are marked unvalidated.
 pub const VALIDATED: &[&str] = &[];
 
-/// How a metric decomposes over units: `scale * sum(numerator) / sum(denominator)`
-/// over the unit rows of its languages, or `scale * sum(numerator)` without a
-/// denominator. Columns of `unit_rows`.
-struct Spec {
-    metric: &'static str,
-    scale: f64,
-    numerator: &'static str,
-    denominator: Option<&'static str>,
-    langs: Option<&'static str>,
-}
+/// How each snapshot metric decomposes over units: (metric, scale, numerator,
+/// denominator, languages), the metric being `scale * sum(numerator) /
+/// sum(denominator)` over the unit rows of those languages, or `scale *
+/// sum(numerator)` without a denominator. Columns of `unit_rows`; they restate
+/// sql/metrics.sql, which the test `contributions_add_up` checks.
+type Spec = (
+    &'static str,
+    f64,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+);
 
+#[rustfmt::skip]
 const SPECS: &[Spec] = &[
-    Spec {
-        metric: "size",
-        scale: 1.0,
-        numerator: "tokens",
-        denominator: None,
-        langs: None,
-    },
-    Spec {
-        metric: "encapsulation",
-        scale: 1.0,
-        numerator: "private_tokens",
-        denominator: Some("fn_tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "concentration",
-        scale: 1.0,
-        numerator: "large_tokens",
-        denominator: Some("fn_tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "decisions",
-        scale: 100.0,
-        numerator: "decisions",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "nesting",
-        scale: 1.0,
-        numerator: "nested_tokens",
-        denominator: Some("fn_tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "global_state",
-        scale: 1000.0,
-        numerator: "global_state",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "exceptions",
-        scale: 1000.0,
-        numerator: "throws",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "invariants",
-        scale: 1000.0,
-        numerator: "invariants",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "unhandled",
-        scale: 1000.0,
-        numerator: "unhandled",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "unfinished",
-        scale: 1000.0,
-        numerator: "unfinished",
-        denominator: Some("tokens"),
-        langs: None,
-    },
-    Spec {
-        metric: "goto",
-        scale: 1000.0,
-        numerator: "gotos",
-        denominator: Some("tokens"),
-        langs: Some("('c', 'cpp')"),
-    },
+    ("size", 1.0, "tokens", None, None),
+    ("encapsulation", 1.0, "private_tokens", Some("fn_tokens"), None),
+    ("concentration", 1.0, "large_tokens", Some("fn_tokens"), None),
+    ("decisions", 100.0, "decisions", Some("tokens"), None),
+    ("nesting", 1.0, "nested_tokens", Some("fn_tokens"), None),
+    ("global_state", 1000.0, "global_state", Some("tokens"), None),
+    ("exceptions", 1000.0, "throws", Some("tokens"), None),
+    ("invariants", 1000.0, "invariants", Some("tokens"), None),
+    ("unhandled", 1000.0, "unhandled", Some("tokens"), None),
+    ("unfinished", 1000.0, "unfinished", Some("tokens"), None),
+    ("goto", 1000.0, "gotos", Some("tokens"), Some("('c', 'cpp')")),
+];
+
+/// Metrics that need history (windows of commits, the import graph), which a
+/// two-commit history cannot give: `diff` leaves them out.
+const HISTORY: &[&str] = &[
+    "co_change_distance",
+    "rework",
+    "change_entropy",
+    "change_span",
+    "ownership",
+    "orphaning",
+    "accretion",
+    "dependency_reach",
+    "import_distance",
+    "import_coverage",
+    "modularity_violations",
 ];
 
 /// Tail metrics of a per-function measure (a column of `unit_rows`): not additive, so
@@ -146,7 +100,6 @@ const TAILS: &[(&str, &str)] = &[
 
 /// One unit's share of a metric's change.
 struct Contribution {
-    kind: String,
     id: String,
     path: String,
     name: String,
@@ -164,13 +117,6 @@ struct Change {
     files: Vec<Contribution>,
 }
 
-/// The output formats of `cv diff`.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum Format {
-    Json,
-    Text,
-}
-
 /// Each metric's change from `base` to `head` in `repo`, with the `top` functions and
 /// files that account for most of it, as JSON or text. Spans come from the database
 /// at `scanned` when it exists.
@@ -182,13 +128,7 @@ pub fn diff(
     top: usize,
     format: Format,
 ) -> Result<String> {
-    let resolve = |rev: &str| -> Result<gix::Commit<'_>> {
-        repo.rev_parse_single(rev)
-            .map_err(anyhow::Error::from)
-            .and_then(|r| Ok(r.object()?.peel_to_commit()?))
-            .with_context(|| format!("resolve {rev:?} to a commit"))
-    };
-    let (base, head) = (resolve(base)?, resolve(head)?);
+    let (base, head) = (commit(repo, base)?, commit(repo, head)?);
     let mut db = Connection::open_in_memory()?;
     db.execute_batch(codevitals::SQL)
         .context("apply codevitals' SQL")?;
@@ -197,7 +137,10 @@ pub fn diff(
     let parsed = crate::parse::parse(&mut db, repo)?;
     info!(reused, parsed, "blobs");
     // Materializes the helper views once for every metric, deriving the cones too.
-    let mut roots: Vec<String> = crate::metrics::list(&db)?.iter().map(|m| format!("metrics.{m}")).collect();
+    let mut roots: Vec<String> = crate::metrics::list(&db)?
+        .iter()
+        .map(|m| format!("metrics.{m}"))
+        .collect();
     roots.extend(["units.files".into(), "units.functions".into()]);
     crate::metrics::cache_helpers(&mut db, &roots)?;
 
@@ -226,7 +169,8 @@ pub fn diff(
             }
             continue;
         }
-        let Some(spec) = SPECS.iter().find(|s| s.metric == metric) else {
+        let Some(spec) = SPECS.iter().find(|s| s.0 == metric) else {
+            debug_assert!(HISTORY.contains(&metric.as_str()), "{metric} is not placed");
             continue;
         };
         if b.is_none() && h.is_none() {
@@ -378,13 +322,7 @@ fn contributions(
     spec: &Spec,
     top: usize,
 ) -> Result<(Vec<Contribution>, Vec<Contribution>)> {
-    let Spec {
-        scale,
-        numerator: n,
-        denominator,
-        langs,
-        ..
-    } = spec;
+    let (_, scale, n, denominator, langs) = spec;
     let filter = langs.map_or(String::new(), |l| format!("and lang in {l}"));
     let d = denominator.unwrap_or("1");
     let share = match denominator {
@@ -402,28 +340,30 @@ fn contributions(
                   coalesce(sum({d}) filter (s = 1), 0) - coalesce(sum({d}) filter (s = 0), 0) as dd
            from unit_rows where true {filter} group by kind, id, lineage),
          shares as (select u.*, coalesce({share}, 0) as share from units u, totals)
-         select 'function', id, path, name, share from (
+         select true, id, path, name, share from (
            select * from shares where share <> 0 order by abs(share) desc, id limit {top})
          union all
-         select 'file', lineage, path, path, share from (
+         select false, lineage, path, path, share from (
            select lineage, any_value(path) filter (kind = 'file') as path, sum(share) as share
            from shares group by lineage having sum(share) <> 0
            order by abs(sum(share)) desc, lineage limit {top})"
     );
-    let rows: Vec<Contribution> = db
+    let rows: Vec<(bool, Contribution)> = db
         .prepare(&query)?
         .query_map([], |r| {
-            Ok(Contribution {
-                kind: r.get(0)?,
+            let c = Contribution {
                 id: r.get(1)?,
                 path: r.get(2)?,
                 name: r.get(3)?,
                 value: r.get(4)?,
-            })
+            };
+            Ok((r.get(0)?, c))
         })?
         .collect::<Result<_, _>>()?;
     // Functions include each file's code outside functions, as `(outside functions)`.
-    Ok(rows.into_iter().partition(|c| c.kind == "function"))
+    let (functions, files): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.0);
+    let units = |rows: Vec<(bool, Contribution)>| rows.into_iter().map(|r| r.1).collect();
+    Ok((units(functions), units(files)))
 }
 
 /// The `top` functions whose `measure` changed most, by that change (a function
@@ -439,7 +379,6 @@ fn measure_changes(db: &Connection, measure: &str, top: usize) -> Result<Vec<Con
         .prepare(&query)?
         .query_map([], |r| {
             Ok(Contribution {
-                kind: "function".into(),
                 id: r.get(0)?,
                 path: r.get(1)?,
                 name: r.get(2)?,
@@ -448,27 +387,6 @@ fn measure_changes(db: &Connection, measure: &str, top: usize) -> Result<Vec<Con
         })?
         .collect::<Result<_, _>>()?;
     Ok(rows)
-}
-
-fn json_text(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).expect("write to String"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn json_number(v: Option<f64>) -> String {
-    match v {
-        Some(v) if v.is_finite() => format!("{v}"),
-        _ => "null".into(),
-    }
 }
 
 fn relative(c: &Change) -> Option<f64> {
@@ -592,4 +510,23 @@ fn text(
         None => out.push_str("edit thrash    - (BASE is not on HEAD's first-parent chain)\n"),
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every metric is decomposed, a tail, or one that needs history: a new metric
+    /// must be placed here.
+    #[test]
+    fn every_metric_is_placed() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(codevitals::SQL).unwrap();
+        for m in crate::metrics::list(&db).unwrap() {
+            let placed = SPECS.iter().any(|s| s.0 == m)
+                || TAILS.iter().any(|t| t.0 == m)
+                || HISTORY.contains(&m.as_str());
+            assert!(placed, "{m} is not in diff.rs SPECS, TAILS or HISTORY");
+        }
+    }
 }

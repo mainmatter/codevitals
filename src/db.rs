@@ -19,6 +19,15 @@ pub const BATCH: usize = 500;
 const MEMORY_LIMIT: &str = "4GB";
 const SPILL_LIMIT: &str = "4GB";
 
+/// The newest scanned commit: its seq and id.
+pub fn tip(db: &Connection) -> Result<(i32, String)> {
+    Ok(db.query_row(
+        "select seq, id from commits order by seq desc limit 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
+}
+
 /// A stored object id.
 pub fn oid(hex: &str) -> ObjectId {
     ObjectId::from_hex(hex.as_bytes()).expect("stored ids are 40 hex characters")

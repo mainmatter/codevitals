@@ -328,7 +328,7 @@ fn function_extras(node: Node, src: &[u8], leaves: &[(usize, usize, u16)], f: &S
             .and_then(|d| d.child_by_field_name("parameters"))
     });
     if let (Some(body), Some(params)) = (body, params) {
-        let names: Vec<String> = params
+        let mut names: Vec<String> = params
             .named_children(&mut params.walk())
             .filter(|p| !p.kind().contains("comment") && !p.kind().starts_with("self"))
             .filter(|p| !(p.kind() == "identifier" && text(*p) == "self"))
@@ -358,7 +358,7 @@ fn function_extras(node: Node, src: &[u8], leaves: &[(usize, usize, u16)], f: &S
             }
         }
         if let Some(call) = call.filter(|c| c.kind() == "call_expression" || c.kind() == "call") {
-            let args: Vec<String> = call
+            let mut args: Vec<String> = call
                 .child_by_field_name("arguments")
                 .map(|a| {
                     a.named_children(&mut a.walk())
@@ -367,11 +367,9 @@ fn function_extras(node: Node, src: &[u8], leaves: &[(usize, usize, u16)], f: &S
                         .collect()
                 })
                 .unwrap_or_default();
-            let mut sorted_args = args.clone();
-            sorted_args.sort();
-            let mut sorted_names = names.clone();
-            sorted_names.sort();
-            if !names.is_empty() && sorted_args == sorted_names {
+            args.sort();
+            names.sort();
+            if !names.is_empty() && args == names {
                 out.push(with("forward", f.tokens as usize, 0));
             }
         }

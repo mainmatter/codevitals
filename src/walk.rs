@@ -42,16 +42,7 @@ pub fn walk(
         })
     };
 
-    let head = repo
-        .rev_parse_single(rev)
-        .and_then(|r| Ok(r.object()?.peel_to_commit()?.id))
-        .map_err(anyhow::Error::from)
-        .with_context(|| {
-            format!(
-                "resolve {rev:?} to a commit; pass a branch, tag or commit id with --rev \
-                 (a repository whose HEAD has no commits, such as a jj workspace, needs one)"
-            )
-        })?;
+    let head = commit(repo, rev)?.id;
     // New commits, newest first.
     let mut chain = Vec::new();
     let mut next = Some(head);
@@ -156,6 +147,19 @@ pub fn walk(
     let entries = mailmap(db, repo, head)?;
     info!(commits = chain.len(), changes, mailmap = entries, elapsed = ?started.elapsed(), "walk done");
     Ok((chain.len(), changes))
+}
+
+/// The commit `rev` (a branch, tag, commit id, `HEAD~3`, ...) names.
+pub fn commit<'r>(repo: &'r gix::Repository, rev: &str) -> Result<gix::Commit<'r>> {
+    repo.rev_parse_single(rev)
+        .map_err(anyhow::Error::from)
+        .and_then(|r| Ok(r.object()?.peel_to_commit()?))
+        .with_context(|| {
+            format!(
+                "resolve {rev:?} to a commit; pass a branch, tag or commit id \
+                 (a repository whose HEAD has no commits, such as a jj workspace, needs one)"
+            )
+        })
 }
 
 /// Replaces `mailmap` with the entries of `.mailmap` at the scanned revision (none

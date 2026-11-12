@@ -3,6 +3,8 @@
 use anyhow::{Context, Result};
 use duckdb::{Connection, OptionalExt, params};
 
+use crate::util::Format;
+
 /// One JSON object with the commit (`seq`, `id`) and the production `files` and
 /// `functions` live at the stored commit `rev` (an id or prefix of one; the newest
 /// when `None`), each an array of row objects.
@@ -16,11 +18,7 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
             )
             .optional()?
             .with_context(|| format!("{rev:?} is no scanned commit; pass a commit id (or a prefix of one) that `cv scan` recorded"))?,
-        None => db.query_row(
-            "select seq, id from commits order by seq desc limit 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?,
+        None => crate::db::tip(db)?,
     };
     crate::metrics::cache_helpers(db, &["units.files".into(), "units.functions".into()])?;
     let rows = |view: &str, order: &str| -> Result<String> {
@@ -43,16 +41,13 @@ pub fn export(db: &mut Connection, rev: Option<&str>) -> Result<String> {
 
 /// The `top` hotspots at the newest scanned commit (`units.hotspots`), as JSON
 /// (`{"seq":..,"id":..,"days":..,"validated":false,"files":[..]}`) or as text.
-pub fn hotspots(db: &mut Connection, top: usize, json: bool) -> Result<String> {
+pub fn hotspots(db: &mut Connection, top: usize, format: Format) -> Result<String> {
     crate::metrics::cache_helpers(db, &["units.hotspots".into()])?;
-    let (seq, id, days): (i32, String, i32) = db.query_row(
-        "select seq, id, hotspot_days() from commits order by seq desc limit 1",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+    let (seq, id) = crate::db::tip(db)?;
+    let days: i32 = db.query_row("select hotspot_days()", [], |r| r.get(0))?;
     let query =
         format!("select * from units.hotspots where score > 0 order by rank, path limit {top}");
-    if json {
+    if matches!(format, Format::Json) {
         let files: String = db.query_row(
             &format!("select coalesce(json_group_array(t), '[]') from ({query}) t"),
             [],

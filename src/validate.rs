@@ -15,6 +15,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use duckdb::Connection;
+
+use crate::util::{Rng, json_number, json_text};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Per-function metrics validated against labels: columns of `function_facts`, the
@@ -35,9 +37,7 @@ const RESAMPLES: usize = 2000;
 /// One decided judgment: per metric, +1 when the function with the higher value is
 /// the one not chosen (the rater would rather not change it), -1 when it is the one
 /// chosen, 0 when both functions have the same value.
-struct Judgment {
-    signs: Vec<i8>,
-}
+type Judgment = Vec<i8>;
 
 /// A metric's result.
 pub struct Support {
@@ -184,9 +184,11 @@ const FIX_RECALL: &str =
 
 /// Loads the labels file into a temp table and computes the report.
 pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
-    crate::metrics::cache_helpers(db, &["function_facts".into(), "units.defect_windows".into()])?;
-    db.execute_batch("create or replace temp table all_labels as select * from labels limit 0")?;
-    let labels = crate::labels::load(db, file, "all_labels")?;
+    crate::metrics::cache_helpers(
+        db,
+        &["function_facts".into(), "units.defect_windows".into()],
+    )?;
+    let labels = crate::labels::load(db, file)?;
     // Each label's two functions with their metrics (any declared test features: the
     // facts of a function do not depend on them unless it is test code).
     let columns: Vec<String> = METRICS
@@ -198,7 +200,7 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
            select blob, start_byte, end_byte, any_value(columns(['{}'])) from function_facts
            group by blob, start_byte, end_byte)
          select l.choice, a.blob is not null and b.blob is not null, {}
-         from all_labels l
+         from labels l
          left join f a on a.blob = l.a_blob and a.start_byte = l.a_start and a.end_byte = l.a_end
          left join f b on b.blob = l.b_blob and b.start_byte = l.b_start and b.end_byte = l.b_end",
         METRICS.join("', '"),
@@ -231,7 +233,7 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
                 })
             })
             .collect::<duckdb::Result<_>>()?;
-        judgments.push(Judgment { signs });
+        judgments.push(signs);
     }
     drop(rows);
     drop(stmt);
@@ -255,7 +257,7 @@ pub fn validate(db: &mut Connection, file: &Path) -> Result<Report> {
 fn share(judgments: &[Judgment], idx: &[usize], metric: usize) -> Option<f64> {
     let (mut wins, mut n) = (0usize, 0usize);
     for &i in idx {
-        match judgments[i].signs[metric] {
+        match judgments[i][metric] {
             1 => {
                 wins += 1;
                 n += 1
@@ -274,25 +276,16 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn support(judgments: &[Judgment], metric: usize) -> Support {
     let all: Vec<usize> = (0..judgments.len()).collect();
-    let pairs = all
-        .iter()
-        .filter(|&&i| judgments[i].signs[metric] != 0)
-        .count();
+    let pairs = all.iter().filter(|&&i| judgments[i][metric] != 0).count();
     let point = share(judgments, &all, metric).unwrap_or(f64::NAN);
     // Paired with tokens: judgments both decide.
     let both: Vec<usize> = all
         .iter()
         .copied()
-        .filter(|&i| judgments[i].signs[metric] != 0 && judgments[i].signs[0] != 0)
+        .filter(|&i| judgments[i][metric] != 0 && judgments[i][0] != 0)
         .collect();
-    let mut rng = xxh3_64(METRICS[metric].as_bytes());
-    let mut next = |n: usize| {
-        rng = rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        ((z ^ (z >> 31)) % n as u64) as usize
-    };
+    let mut rng = Rng::new(METRICS[metric]);
+    let mut next = |n: usize| rng.below(n);
     let (mut shares, mut diffs) = (Vec::new(), Vec::new());
     if !all.is_empty() {
         for _ in 0..RESAMPLES {
@@ -357,7 +350,7 @@ fn agreement(db: &Connection) -> Result<(Vec<Agreement>, Option<Agreement>, Opti
     let rows: Vec<Row> = db
         .prepare(
             "select rater, n, a_blob, a_start, a_end, b_blob, b_start, b_end, choice, repeat_of
-             from all_labels order by rater, n",
+             from labels order by rater, n",
         )?
         .query_map([], |r| {
             Ok((
@@ -452,14 +445,6 @@ fn agreement(db: &Connection) -> Result<(Vec<Agreement>, Option<Agreement>, Opti
     Ok((self_agreement, between, kappa))
 }
 
-fn num(v: f64) -> String {
-    if v.is_finite() {
-        format!("{v}")
-    } else {
-        "null".into()
-    }
-}
-
 impl Report {
     pub fn json(&self) -> String {
         let d = &self.defects;
@@ -470,8 +455,8 @@ impl Report {
                 format!(
                     "{{\"ranking\":\"{r}\",\"baseline\":{},\"found\":{},\"mean\":{}}}",
                     BASELINES.contains(&r.as_str()),
-                    num(*pooled),
-                    num(*mean)
+                    json_number(Some(*pooled)),
+                    json_number(Some(*mean))
                 )
             })
             .collect();
@@ -494,24 +479,24 @@ impl Report {
             .iter()
             .map(|m| {
                 let vs = m.vs_tokens.map_or("null".to_owned(), |(d, lo, hi)| {
-                    format!("{{\"difference\":{},\"low\":{},\"high\":{}}}", num(d), num(lo), num(hi))
+                    format!("{{\"difference\":{},\"low\":{},\"high\":{}}}", json_number(Some(d)), json_number(Some(lo)), json_number(Some(hi)))
                 });
                 format!(
                     "{{\"metric\":\"{}\",\"baseline\":{},\"pairs\":{},\"share\":{},\"low\":{},\"high\":{},\"vs_tokens\":{vs},\"supported\":{}}}",
                     m.metric,
                     m.metric == METRICS[0],
                     m.pairs,
-                    num(m.share),
-                    num(m.low),
-                    num(m.high),
+                    json_number(Some(m.share)),
+                    json_number(Some(m.low)),
+                    json_number(Some(m.high)),
                     m.supported
                 )
             })
             .collect();
         let agreement = |a: &Agreement| {
             format!(
-                "{{\"rater\":\"{}\",\"agree\":{},\"of\":{}}}",
-                a.who.replace('\\', "\\\\").replace('"', "\\\""),
+                "{{\"rater\":{},\"agree\":{},\"of\":{}}}",
+                json_text(&a.who),
                 a.agree,
                 a.of
             )
@@ -528,7 +513,7 @@ impl Report {
                 "{{\"agree\":{},\"of\":{}}}",
                 a.agree, a.of
             )),
-            self.kappa.map_or("null".into(), num)
+            json_number(self.kappa)
         )
     }
 

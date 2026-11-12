@@ -2,20 +2,14 @@
 
 mod common;
 
-use common::{Repo, cv, scan};
+use common::{Repo, scan, succeeds};
 
 /// Runs `cv diff` on `dir/repo`, which must succeed, and returns its stdout.
 fn diff(r: &Repo, args: &[&str]) -> String {
     let repo = r.dir.path().join("repo");
     let mut all = vec!["diff", "--repo", repo.to_str().unwrap()];
     all.extend(args);
-    let out = cv(&r.dir, &all);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap()
+    succeeds(&r.dir, &all)
 }
 
 fn history() -> Repo {

@@ -9,6 +9,8 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use duckdb::Connection;
 
+use crate::util::json_text;
+
 /// One judgment: which of two functions the rater would rather not have to change.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Label {
@@ -44,11 +46,12 @@ const COLUMNS: &str = "{'rater': 'varchar', 'n': 'integer', 'time': 'timestamp',
   'choice': 'varchar', 'ms': 'integer', 'a_commits': 'integer', 'b_commits': 'integer',
   'repeat_of': 'integer'}";
 
-/// Replaces the rows of `labels` (in `table`, e.g. `labels` or a temp table) with
-/// those of the labels file at `file`; none when it does not exist. Returns the
-/// number loaded.
-pub fn load(db: &Connection, file: &Path, table: &str) -> Result<usize> {
-    db.execute_batch(&format!("delete from {table}"))?;
+/// Loads the labels file at `file` (none when it does not exist) into a temp table
+/// `labels`, which shadows the stored one for this connection, so a read-only
+/// database can be labelled. Returns the number loaded.
+pub fn load(db: &Connection, file: &Path) -> Result<usize> {
+    let table = "temp.labels";
+    db.execute_batch("create or replace temp table labels as select * from main.labels limit 0")?;
     if !file.exists() || std::fs::metadata(file)?.len() == 0 {
         return Ok(0);
     }
@@ -78,34 +81,22 @@ pub fn load(db: &Connection, file: &Path, table: &str) -> Result<usize> {
 
 /// Appends `label` to the labels file at `file`, creating it if needed.
 pub fn append(file: &Path, label: &Label) -> Result<()> {
-    let text = |s: &str| {
-        let mut out = String::from("\"");
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out + "\""
-    };
     let time = chrono_utc(label.time);
     let repeat = label.repeat_of.map_or("null".to_owned(), |n| n.to_string());
     let line = format!(
         "{{\"rater\":{},\"n\":{},\"time\":\"{time}\",\"a_blob\":\"{}\",\"a_start\":{},\"a_end\":{},\"a_path\":{},\
          \"b_blob\":\"{}\",\"b_start\":{},\"b_end\":{},\"b_path\":{},\"choice\":\"{}\",\"ms\":{},\
          \"a_commits\":{},\"b_commits\":{},\"repeat_of\":{repeat}}}\n",
-        text(&label.rater),
+        json_text(&label.rater),
         label.n,
         label.a.blob,
         label.a.start,
         label.a.end,
-        text(&label.a.path),
+        json_text(&label.a.path),
         label.b.blob,
         label.b.start,
         label.b.end,
-        text(&label.b.path),
+        json_text(&label.b.path),
         label.choice,
         label.ms,
         label.a_commits,
@@ -159,7 +150,7 @@ mod tests {
         let file = dir.path().join("labels.jsonl");
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(codevitals::SQL).unwrap();
-        assert_eq!(load(&db, &file, "labels").unwrap(), 0);
+        assert_eq!(load(&db, &file).unwrap(), 0);
         let f = |blob: &str, path: &str| Function {
             blob: blob.into(),
             start: 3,
@@ -188,7 +179,7 @@ mod tests {
             ..first.clone()
         };
         append(&file, &repeat).unwrap();
-        assert_eq!(load(&db, &file, "labels").unwrap(), 2);
+        assert_eq!(load(&db, &file).unwrap(), 2);
         let rows: Vec<(String, i64, String, String, String, Option<i64>)> = db
             .prepare(
                 "select rater, n, time::varchar, a_path, choice, repeat_of from labels order by n",
@@ -229,7 +220,7 @@ mod tests {
             ]
         );
         // Loading again replaces, not duplicates.
-        assert_eq!(load(&db, &file, "labels").unwrap(), 2);
+        assert_eq!(load(&db, &file).unwrap(), 2);
         let count: i64 = db
             .query_row("select count(*) from labels", [], |r| r.get(0))
             .unwrap();
@@ -242,6 +233,6 @@ mod tests {
                 .replace("\"choice\":\"a\"", "\"choice\":\"x\""),
         )
         .unwrap();
-        assert!(load(&db, &file, "labels").is_err());
+        assert!(load(&db, &file).is_err());
     }
 }

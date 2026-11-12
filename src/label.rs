@@ -19,9 +19,9 @@ use anyhow::{Context, Result, bail, ensure};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, execute, queue, style, terminal};
 use duckdb::{Connection, params};
-use xxhash_rust::xxh3::xxh3_64;
 
 use crate::labels::{self, Function, Label};
+use crate::util::Rng;
 
 /// Smallest and largest functions shown, in tokens, and most lines: a pair must be
 /// readable at a glance and judged in well under a minute.
@@ -65,28 +65,6 @@ pub struct Pair {
     pub a: usize,
     pub b: usize,
     pub repeat_of: Option<i64>,
-}
-
-/// A small deterministic generator (SplitMix64), seeded from text.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: &str) -> Rng {
-        Rng(xxh3_64(seed.as_bytes()))
-    }
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-    fn unit(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1u64 << 53) as f64
-    }
 }
 
 /// Where the rater is: the candidates (in a fixed order), the rater's judgments so
@@ -224,15 +202,13 @@ pub fn run(repo: &gix::Repository, db: &mut Connection, file: &Path) -> Result<u
             "set your git user.email (`git config user.email ...`): it identifies you as rater",
         )?
         .to_lowercase();
-    db.execute_batch("create or replace temp table rater_labels as select * from labels limit 0")?;
-    labels::load(db, file, "rater_labels")?;
+    labels::load(db, file)?;
     let judged = rater_labels(db, &rater)?;
-    let (tip, tip_id): (i32, String) = db.query_row(
-        "select seq, id from commits order by seq desc limit 1",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+    let (tip, tip_id) = crate::db::tip(db)?;
+    crate::metrics::cache_helpers(
+        db,
+        &["units.functions".into(), "author_file_commits".into()],
     )?;
-    crate::metrics::cache_helpers(db, &["units.functions".into(), "author_file_commits".into()])?;
     let candidates: Vec<Candidate> = db
         .prepare(
             "select path, lineage, lang, blob, start_byte, end_byte, line, tokens from units.functions
@@ -312,7 +288,7 @@ fn rater_labels(db: &Connection, rater: &str) -> Result<Vec<Label>> {
         .prepare(
             "select n, epoch(time)::bigint, a_blob, a_start, a_end, a_path, b_blob, b_start, b_end, b_path,
                     choice, ms, a_commits, b_commits, repeat_of
-             from rater_labels where rater = $1 order by n",
+             from labels where rater = $1 order by n",
         )?
         .query_map(params![rater], |r| {
             let f = |i: usize| -> duckdb::Result<Function> {

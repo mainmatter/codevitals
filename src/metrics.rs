@@ -82,9 +82,8 @@ pub fn names() -> PossibleValuesParser {
 /// Whether `text` names `name` as a whole identifier.
 fn mentions(text: &str, name: &str) -> bool {
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    text.match_indices(name).any(|(i, _)| {
-        !text[..i].ends_with(ident) && !text[i + name.len()..].starts_with(ident)
-    })
+    text.match_indices(name)
+        .any(|(i, _)| !text[..i].ends_with(ident) && !text[i + name.len()..].starts_with(ident))
 }
 
 /// Materializes the helper views (schema `main`) that the views `roots` (qualified,
@@ -104,7 +103,12 @@ pub fn cache_helpers(db: &mut Connection, roots: &[String]) -> Result<()> {
              select function_name, macro_definition from duckdb_functions()
              where function_type in ('macro', 'table_macro') and not internal",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        })?
         .collect::<Result<_, _>>()?;
     // Everything the roots read, transitively: grow the text until no new name shows.
     let mut used: Vec<bool> = definitions.iter().map(|(n, _)| roots.contains(n)).collect();
@@ -129,7 +133,12 @@ pub fn cache_helpers(db: &mut Connection, roots: &[String]) -> Result<()> {
     let helpers: Vec<&String> = all
         .iter()
         .map(|(view, _)| view)
-        .filter(|view| definitions.iter().zip(&used).any(|((n, _), u)| *u && n == *view))
+        .filter(|view| {
+            definitions
+                .iter()
+                .zip(&used)
+                .any(|((n, _), u)| *u && n == *view)
+        })
         .collect();
     for view in &helpers {
         let caching = Instant::now();
