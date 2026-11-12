@@ -26,6 +26,9 @@ pub struct Lang {
 pub const KINDS: &[&str] = &[
     "fn", "call", "import", "module", "pub", "static", "branch", "condition", "block",
     "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
+    // What qualifies the names of the functions inside: a Rust impl or trait, a class,
+    // a C++ namespace.
+    "scope",
     // Rust: a module declared without a body (`mod x;`), whose code is in another file.
     "mod_decl",
     // Not captured by a query: code compiled only for tests (`test`), or only when

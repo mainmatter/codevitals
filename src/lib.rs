@@ -11,7 +11,7 @@ pub use extract::{Span, extract};
 pub use languages::{KINDS, LANGS, Lang};
 
 /// The SQL every codevitals database is opened with, in order: the tables, helper views,
-/// the import graph, and the metric views (`sql/`).
+/// the import graph, the metric views and the per-unit views (`sql/`).
 pub const SQL: &str = concat!(
     include_str!("../sql/schema.sql"),
     "\n",
@@ -20,4 +20,6 @@ pub const SQL: &str = concat!(
     include_str!("../sql/imports.sql"),
     "\n",
     include_str!("../sql/metrics.sql"),
+    "\n",
+    include_str!("../sql/units.sql"),
 );

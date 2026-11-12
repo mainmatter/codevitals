@@ -648,3 +648,52 @@ fn rust_test_code_is_not_production() {
         "(src/testutil.rs,test)",
     );
 }
+
+/// Per-unit tables: functions keep their identity across edits and file renames,
+/// are told apart by scope and ordinal, and sum to the per-blob facts; `cv units`
+/// exports one commit's files and functions.
+#[test]
+fn units_follow_files_and_functions() {
+    let v1 = "struct A;\nimpl A {\n    pub fn new() -> A { A }\n}\nimpl Clone for A {\n    fn clone(&self) -> A { if true { A } else { A } }\n}\n\
+              #[cfg(unix)]\nfn os() {}\n#[cfg(windows)]\nfn os() {}\n";
+    let mut r = common::Repo::new();
+    r.write("a.rs", v1);
+    r.commit("main", "c0\n", 0, &[]);
+    r.write(
+        "a.rs",
+        v1.replace("{ A } else { A }", "{ A } else if false { A } else { A }"),
+    );
+    r.extend("edit\n", 1);
+    r.remove("a.rs").write(
+        "src/a.rs",
+        v1.replace("{ A } else { A }", "{ A } else if false { A } else { A }"),
+    );
+    r.extend("move\n", 2);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        "select since, path, function, decisions, public from units.functions order by since, start_byte",
+        "(0,a.rs,0:a.rs A::new,0,true) (0,a.rs,0:a.rs <A as Clone>::clone,1,false) (0,a.rs,0:a.rs os,0,false) (0,a.rs,0:a.rs os#2,0,false) \
+         (1,a.rs,0:a.rs A::new,0,true) (1,a.rs,0:a.rs <A as Clone>::clone,2,false) (1,a.rs,0:a.rs os,0,false) (1,a.rs,0:a.rs os#2,0,false) \
+         (2,src/a.rs,0:a.rs A::new,0,true) (2,src/a.rs,0:a.rs <A as Clone>::clone,2,false) (2,src/a.rs,0:a.rs os,0,false) (2,src/a.rs,0:a.rs os#2,0,false)",
+    );
+    // Functions add up to their file's facts.
+    assert_rows(
+        &r.dir,
+        "select f.since, f.fn_tokens = sum(u.tokens), f.decisions = sum(u.decisions)
+         from units.files f join units.functions u using (path, since)
+         group by f.since, f.fn_tokens, f.decisions order by 1",
+        "(0,true,true) (1,true,true) (2,true,true)",
+    );
+    let first = rev(&r.dir, "main~2");
+    let out = succeeds(&r.dir, &["units", "-", "--rev", &first[..8]]);
+    assert!(
+        out.starts_with(&format!(
+            r#"{{"seq":0,"id":"{first}","files":[{{"path":"a.rs","lineage":"0:a.rs","#
+        )),
+        "{out}"
+    );
+    assert_eq!(out.matches(r#""function":"#).count(), 4, "{out}");
+    let err = fails(&r.dir, &["units", "-", "--rev", "ffffffff"]);
+    assert!(err.contains("no scanned commit"), "{err}");
+}

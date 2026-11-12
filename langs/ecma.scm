@@ -19,3 +19,4 @@
 (program (lexical_declaration "let") @global_state)
 (export_statement declaration: (lexical_declaration "let") @global_state)
 (throw_statement) @throw
+[(class_declaration name: (_) @name) (class name: (_) @name)] @scope

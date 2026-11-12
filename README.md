@@ -16,6 +16,7 @@ or `cargo install --git https://github.com/mainmatter/codevitals`.
 cv scan                    # record history into codevitals.duckdb; rerun to add new commits
 cv metrics metrics.json    # compute every metric into one JSON file
 cv metrics --help          # list the metrics
+cv units units.json        # the production files and functions behind them, at the newest commit
 ```
 
 To look at the result, import `grafana/dashboards/codevitals.json` into Grafana with
@@ -85,6 +86,7 @@ for the path, as above.
 `nix develop` (or direnv) gives the pinned toolchain, the `duckdb` CLI and
 `cv-grafana`; `cargo test` runs in seconds. Metrics are views in
 `sql/metrics.sql`; after changing one, run `python3 grafana/generate.py`.
+Per-file and per-function values are the views of schema `units` (`sql/units.sql`).
 Languages are rows in `src/languages.rs` with a query in `langs/`.
 
 ## License

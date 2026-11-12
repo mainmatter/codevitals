@@ -12,3 +12,5 @@
 (call_expression function: (field_expression field: (field_identifier) @_f) (#match? @_f "^(unwrap|expect)$")) @throw
 (mod_item name: (identifier) @name !body) @mod_decl
 [(attribute_item) (inner_attribute_item)] @attr
+(impl_item type: (_) @name) @scope
+(trait_item name: (_) @name) @scope

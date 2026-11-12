@@ -7,3 +7,4 @@
 (block) @block
 [(global_statement) (nonlocal_statement)] @global_state
 (raise_statement) @throw
+(class_definition name: (identifier) @name) @scope

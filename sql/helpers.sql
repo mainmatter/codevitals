@@ -228,29 +228,70 @@ select win, seq,
 from members
 qualify span_weeks <= window_max_weeks();
 
--- Additive structure facts per blob and declared test features, production code only
--- (code_spans). Nesting: deepest block minus the body block.
-create or replace view blob_facts as
-with nesting as (
-  select f.blob, f.test_features, any_value(f.tokens) as tokens,
-         -- Syntactic visibility: pub/export markers, C/C++ not static, Python no `_`.
-         any_value(case when f.lang in ('c', 'cpp')
-                          then (f.blob, f.start_byte, f.end_byte) not in (select blob, start_byte, end_byte from spans where kind = 'static')
-                        when f.lang = 'python' then not starts_with(f.name, '_')
-                        else (f.blob, f.start_byte, f.end_byte) in (select blob, start_byte, end_byte from spans where kind = 'pub')
-                   end) as public,
+-- Each production function of each blob (per declared test features): its
+-- qualified name (the scopes, modules and functions around it, then its own name;
+-- `?` when it has none), its ordinal among functions of that qualified name in the
+-- blob, and its facts. Decisions, throws and gotos count in the innermost function
+-- around them; nesting is the deepest block minus the body block, inner functions'
+-- blocks included.
+create or replace view function_facts as
+with fns as (
+  select blob, test_features, lang, start_byte, end_byte, coalesce(name, '?') as name,
+         line, end_line, tokens, params, hash
+  from code_spans where kind = 'fn'),
+qualified as (
+  select f.blob, f.test_features, f.start_byte, f.end_byte,
+         string_agg(coalesce(s.name, '?'), '::' order by s.start_byte, s.end_byte desc) as outer_names
+  from fns f join code_spans s
+    on s.blob = f.blob and s.test_features = f.test_features and s.kind in ('scope', 'module', 'fn')
+   and s.start_byte <= f.start_byte and f.end_byte <= s.end_byte
+   and (s.start_byte, s.end_byte) <> (f.start_byte, f.end_byte)
+  group by all),
+innermost as (
+  select s.blob, s.test_features, s.kind, f.start_byte, f.end_byte
+  from code_spans s join fns f
+    on f.blob = s.blob and f.test_features = s.test_features
+   and f.start_byte <= s.start_byte and s.end_byte <= f.end_byte
+  where s.kind in ('branch', 'condition', 'throw', 'goto')
+  qualify row_number() over (partition by s.blob, s.test_features, s.kind, s.start_byte, s.end_byte
+                             order by f.start_byte desc, f.end_byte) = 1),
+counts as (
+  select blob, test_features, start_byte, end_byte,
+         count(*) filter (kind in ('branch', 'condition')) as decisions,
+         count(*) filter (kind = 'throw') as throws,
+         count(*) filter (kind = 'goto') as gotos
+  from innermost group by all),
+nesting as (
+  select f.blob, f.test_features, f.start_byte, f.end_byte,
          coalesce(max(b.depth) - min(b.depth), 0) as nesting
-  from code_spans f
-  left join spans b on b.blob = f.blob and b.kind = 'block'
+  from fns f left join spans b on b.blob = f.blob and b.kind = 'block'
     and b.start_byte >= f.start_byte and b.end_byte <= f.end_byte
-  where f.kind = 'fn'
-  group by f.blob, f.test_features, f.start_byte, f.end_byte),
-functions as (
+  group by all)
+select f.blob, f.test_features, f.lang, f.start_byte, f.end_byte, f.line, f.end_line, f.name,
+       concat_ws('::', q.outer_names, f.name) as qualified,
+       row_number() over (partition by f.blob, f.test_features, qualified order by f.start_byte) as ordinal,
+       f.tokens, f.params, f.hash,
+       -- Syntactic visibility: pub/export markers, C/C++ not static, Python no `_`.
+       case when f.lang in ('c', 'cpp')
+              then (f.blob, f.start_byte, f.end_byte) not in (select blob, start_byte, end_byte from spans where kind = 'static')
+            when f.lang = 'python' then not starts_with(f.name, '_')
+            else (f.blob, f.start_byte, f.end_byte) in (select blob, start_byte, end_byte from spans where kind = 'pub')
+       end as public,
+       n.nesting, coalesce(c.decisions, 0) as decisions, coalesce(c.throws, 0) as throws,
+       coalesce(c.gotos, 0) as gotos
+from fns f join nesting n using (blob, test_features, start_byte, end_byte)
+left join qualified q using (blob, test_features, start_byte, end_byte)
+left join counts c using (blob, test_features, start_byte, end_byte);
+
+-- Additive structure facts per blob and declared test features, production code only
+-- (code_spans), with the function facts summed.
+create or replace view blob_facts as
+with functions as (
   select blob, test_features, sum(tokens) as fn_tokens, sum(tokens * nesting) as nested_tokens,
          coalesce(sum(tokens) filter (nesting > deep_nesting()), 0) as deep_tokens,
          coalesce(sum(tokens) filter (not public), 0) as private_tokens,
          coalesce(sum(tokens) filter (tokens > large_tokens()), 0) as large_tokens
-  from nesting group by blob, test_features),
+  from function_facts group by blob, test_features),
 tests as (
   select blob, test_features, sum(tokens) as test_tokens from test_ranges group by all),
 counts as (

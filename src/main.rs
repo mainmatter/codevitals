@@ -19,6 +19,7 @@ mod db;
 mod graph;
 mod metrics;
 mod parse;
+mod units;
 mod walk;
 
 /// Record facts about a git repository's history into a DuckDB file.
@@ -48,6 +49,18 @@ enum Cli {
         /// Metrics to compute; all of them when omitted.
         #[arg(value_name = "METRIC")]
         names: Vec<String>,
+    },
+    /// Export the production files and functions at one scanned commit, with the
+    /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
+    /// A function keeps its `function` id across versions while its file and name do.
+    Units {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// File to write, replaced atomically; `-` writes to stdout.
+        output: PathBuf,
+        /// Scanned commit (id or prefix); the newest when omitted.
+        #[arg(long)]
+        rev: Option<String>,
     },
 }
 
@@ -81,18 +94,7 @@ fn main() -> Result<()> {
             output,
             names,
         } => {
-            ensure!(
-                path.exists(),
-                "no database at {path:?}; create it with `cv scan --db {}`",
-                path.display()
-            );
-            let mut db = open(&path, AccessMode::ReadOnly)?;
-            let commits: i64 = db.query_row("select count(*) from commits", [], |r| r.get(0))?;
-            ensure!(
-                commits > 0,
-                "{path:?} has no commits yet; run `cv scan --db {}` first",
-                path.display()
-            );
+            let mut db = open_scanned(&path)?;
             let metrics = metrics::list(&db)?;
             ensure!(
                 !metrics.iter().any(|m| output.as_os_str() == m.as_str()),
@@ -113,19 +115,49 @@ fn main() -> Result<()> {
                 }
             };
             let json = metrics::export(&mut db, &names)?;
-            if output.as_os_str() == "-" {
-                println!("{json}");
-            } else {
-                // Write beside the target, then rename: readers never see a partial file.
-                let partial = output.with_extension("partial");
-                std::fs::write(&partial, json + "\n")
-                    .with_context(|| format!("write {partial:?}"))?;
-                std::fs::rename(&partial, &output)
-                    .with_context(|| format!("replace {output:?}"))?;
-                info!(?output, "metrics written");
-            }
+            write(&output, json)?;
+            info!(?output, "metrics written");
+        }
+        Cli::Units {
+            db: path,
+            output,
+            rev,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let json = units::export(&mut db, rev.as_deref())?;
+            write(&output, json)?;
         }
     }
+    Ok(())
+}
+
+/// Opens an existing database with at least one scanned commit, read-only.
+fn open_scanned(path: &std::path::Path) -> Result<duckdb::Connection> {
+    ensure!(
+        path.exists(),
+        "no database at {path:?}; create it with `cv scan --db {}`",
+        path.display()
+    );
+    let db = open(path, AccessMode::ReadOnly)?;
+    let commits: i64 = db.query_row("select count(*) from commits", [], |r| r.get(0))?;
+    ensure!(
+        commits > 0,
+        "{path:?} has no commits yet; run `cv scan --db {}` first",
+        path.display()
+    );
+    Ok(db)
+}
+
+/// Writes `text` and a newline to `output`, atomically, or to stdout for `-`.
+fn write(output: &std::path::Path, text: String) -> Result<()> {
+    if output.as_os_str() == "-" {
+        println!("{text}");
+        return Ok(());
+    }
+    // Write beside the target, then rename: readers never see a partial file.
+    let partial = output.with_extension("partial");
+    std::fs::write(&partial, text + "\n").with_context(|| format!("write {partial:?}"))?;
+    std::fs::rename(&partial, output).with_context(|| format!("replace {output:?}"))?;
     Ok(())
 }
 

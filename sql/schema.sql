@@ -2,6 +2,8 @@
 create table if not exists codevitals (schema integer, extractor integer);
 -- The metric views (metrics.sql).
 create schema if not exists metrics;
+-- Per-file and per-function values behind the metrics (units.sql).
+create schema if not exists units;
 
 -- author_name, author_email: as the commit records them; `authors` applies .mailmap.
 create table if not exists commits (

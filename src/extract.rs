@@ -203,7 +203,11 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         }
         s.depth = int(stack.len());
         stack.push(end);
-        s.name = name;
+        s.name = match node.filter(|n| n.kind() == "impl_item") {
+            // `impl Trait for Type`: the type, as the trait implemented for it.
+            Some(n) => impl_name(n, &text),
+            None => name,
+        };
         s.params = params.map(|p| {
             int(p
                 .named_children(&mut p.walk())
@@ -228,6 +232,16 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
 
 /// When code is test code: a disjunction of conjunctions of feature names.
 type Gate = Vec<Vec<String>>;
+
+/// The name of a Rust impl block: `Type`, or `<Type as Trait>` for a trait's.
+fn impl_name(node: Node, text: &impl Fn(Node) -> String) -> Option<String> {
+    let squash = |n: Node| text(n).split_whitespace().collect::<Vec<_>>().join(" ");
+    let ty = squash(node.child_by_field_name("type")?);
+    Some(match node.child_by_field_name("trait") {
+        Some(t) => format!("<{ty} as {}>", squash(t)),
+        None => ty,
+    })
+}
 
 /// A span to emit: its start and end (byte and point), the node it was captured
 /// as (none for test spans, which start at an attribute and end with its item),

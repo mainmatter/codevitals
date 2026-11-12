@@ -75,7 +75,7 @@ pub fn names() -> PossibleValuesParser {
 /// name. The temp table shadows the view for this connection only, so metrics that
 /// share a helper compute it once. `cones` derive from `import_edges`, so they are
 /// rebuilt as soon as it is cached, before the helpers that read them.
-fn cache_helpers(db: &mut Connection) -> Result<()> {
+pub fn cache_helpers(db: &mut Connection) -> Result<()> {
     let started = Instant::now();
     let helpers = views(db, "main")?;
     for (view, _) in &helpers {

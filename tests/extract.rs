@@ -68,6 +68,7 @@ fn plus(x: i32, y: i32) -> i32 {
         "file NULL 1 15 60 7 NULL 0
 import std::collections::HashMap 1 1 7 0 NULL NULL
 fn add 4 7 18 3 2 NULL
+scope Foo 9 11 17 0 NULL NULL
 fn get 10 10 13 0 1 NULL
 fn plus 13 15 18 0 2 NULL
 ",
@@ -349,6 +350,7 @@ import ./a 1 1 9 0 NULL NULL
 fn add 4 4 20 0 2 NULL
 fn id 5 5 9 0 1 NULL
 fn inc 6 6 7 0 NULL NULL
+scope K 7 7 15 0 NULL NULL
 fn m 7 7 11 0 2 NULL
 "#,
     );
@@ -508,6 +510,38 @@ mod other;
     assert_eq!(
         (test.start_byte, test.end_byte, test.tokens),
         (0, 32, spans[0].tokens)
+    );
+}
+
+/// Scopes qualify function names: Rust impls (named by type, and trait for a trait
+/// impl) and traits, classes, C++ namespaces.
+#[test]
+fn scopes() {
+    let scopes = |path: &str, src: &str| {
+        extract(Lang::of(path).unwrap(), src.as_bytes())
+            .into_iter()
+            .filter(|s| s.kind == "scope")
+            .map(|s| s.name.unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        scopes(
+            "x.rs",
+            "impl Foo<T> { fn new() {} }\nimpl fmt::Display for Foo<T> { fn fmt() {} }\ntrait Bar { fn b() {} }\n"
+        ),
+        ["Foo<T>", "<Foo<T> as fmt::Display>", "Bar"]
+    );
+    assert_eq!(scopes("x.py", "class A:\n    def f(self): pass\n"), ["A"]);
+    assert_eq!(
+        scopes(
+            "x.cpp",
+            "namespace n { class C { void f(); }; struct D; }\n"
+        ),
+        ["n", "C"]
+    );
+    assert_eq!(
+        scopes("x.js", "class A { f() {} }\nconst B = class Q {};\n"),
+        ["A", "Q"]
     );
 }
 
