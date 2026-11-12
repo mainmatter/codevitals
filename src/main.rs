@@ -23,6 +23,7 @@ mod labels;
 mod metrics;
 mod parse;
 mod units;
+mod validate;
 mod walk;
 
 /// Record facts about a git repository's history into a DuckDB file.
@@ -96,6 +97,18 @@ enum Cli {
         /// Labels file (JSON Lines) to append to.
         #[arg(long, default_value = "codevitals-labels.jsonl")]
         labels: PathBuf,
+    },
+    /// Check per-function metrics against the labels of `cv label`: how often the
+    /// function with the higher value is the one raters would rather not change,
+    /// against token count as baseline, with raters' self-agreement and agreement.
+    Validate {
+        #[arg(long, default_value = "codevitals.duckdb")]
+        db: PathBuf,
+        /// Labels file (JSON Lines) of `cv label`.
+        #[arg(long, default_value = "codevitals-labels.jsonl")]
+        labels: PathBuf,
+        #[arg(long, value_enum, default_value_t = diff::Format::Text)]
+        format: diff::Format,
     },
     /// Export the production files and functions at one scanned commit, with the
     /// values the metrics add up (tokens, decisions, nesting, ...), as one JSON object.
@@ -203,6 +216,18 @@ fn main() -> Result<()> {
             let mut db = open_scanned(&path)?;
             let made = label::run(&repo, &mut db, &labels)?;
             eprintln!("{made} judgments added to {}", labels.display());
+        }
+        Cli::Validate {
+            db: path,
+            labels,
+            format,
+        } => {
+            let mut db = open_scanned(&path)?;
+            let report = validate::validate(&mut db, &labels)?;
+            match format {
+                diff::Format::Json => println!("{}", report.json()),
+                diff::Format::Text => print!("{}", report.text()),
+            }
         }
         Cli::Units {
             db: path,

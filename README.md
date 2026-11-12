@@ -20,6 +20,7 @@ cv units units.json        # the production files and functions behind them, at 
 cv diff main~10 main       # each metric's change over a range, and the functions and files behind it
 cv hotspots                # files ranked by recent changes times decision points
 cv label                   # judge pairs of functions: which would you rather have to change?
+cv validate                # does each per-function metric predict those judgments better than size?
 ```
 
 `cv diff` needs no scan: it parses the blobs the database lacks (with a scan that
