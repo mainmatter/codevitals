@@ -295,10 +295,8 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
     let mut cursor = QueryCursor::new();
     cursor.set_max_start_depth(Some(0));
     let mut facts = Facts::default();
-    // The nodes walked, in pre-order, with their depth and, for the copied ones, how
-    // far they moved and where they were.
-    let mut walked = Vec::<(Node, usize, Option<(Shift, Range<usize>)>)>::new();
-    let copyable = |n: Node| -> Option<(Shift, Range<usize>)> {
+    // The facts of the blob before for `n`'s subtree, how far it moved and where it was.
+    let copyable = |n: Node| -> Option<(&Facts, Shift, Range<usize>)> {
         let (old, changes) = old?;
         if n.has_error() {
             return None;
@@ -312,15 +310,25 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
             .iter()
             .take_while(|p| **p <= was.end)
             .any(at_edge))
-        .then_some((shift, was))
+        .then_some((old, shift, was))
     };
+    let has_errors = tree.root_node().has_error();
+    let mut comment_depth = None; // depth of the comment node we are inside
     let mut walk = tree.walk();
     let mut depth = 0;
     'walk: loop {
         let n = walk.node();
+        let (start, end) = (n.start_byte(), n.end_byte());
+        if comment_depth.is_some_and(|d| depth <= d) {
+            comment_depth = None;
+        }
+        if has_errors {
+            facts.errors += usize::from(n.is_error() || n.is_missing());
+        }
+        let found = facts.matches.len();
         let copied = copyable(n);
-        match (&copied, old) {
-            (Some((shift, was)), Some((old, _))) => {
+        match &copied {
+            Some((old, shift, was)) => {
                 let from = old.matches.partition_point(|m| m.root.0 < was.start);
                 facts.matches.extend(
                     old.matches[from..]
@@ -330,16 +338,38 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
                         .map(|m| m.clone().shifted(*shift)),
                 );
             }
-            _ => {
+            None => {
                 let mut matches = cursor.matches(query, n, src);
                 while let Some(m) = matches.next() {
                     facts.matches.push(matched(query, src, n, m.captures));
                 }
             }
         }
-        let descend = copied.is_none();
-        walked.push((n, depth, copied));
-        if descend && walk.goto_first_child() {
+        // Comments are captured at their match's root (`matched` checks), so a comment
+        // node is the first one walked whose matches capture its bytes as a comment.
+        let comment = |m: &Match| m.comments.iter().any(|c| (c.0, c.1) == (start, end));
+        if comment_depth.is_none() && facts.matches[found..].iter().any(comment) {
+            comment_depth = Some(depth);
+        }
+        // Code leaves: those outside comments.
+        if comment_depth.is_none() {
+            match &copied {
+                Some((old, shift, was)) => {
+                    let from = old.leaves.partition_point(|l| l.0 < was.start);
+                    facts.leaves.extend(
+                        old.leaves[from..]
+                            .iter()
+                            .take_while(|l| l.1 <= was.end)
+                            .map(|l| (moved(l.0, *shift), moved(l.1, *shift), l.2)),
+                    );
+                }
+                None if n.child_count() == 0 && start < end => {
+                    facts.leaves.push((start, end, n.kind_id()))
+                }
+                None => {}
+            }
+        }
+        if copied.is_none() && walk.goto_first_child() {
             depth += 1;
             continue;
         }
@@ -359,53 +389,6 @@ fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -
         .filter(|m| m.root.0 == m.root.1)
         .map(|m| m.root.0)
         .collect();
-
-    // Code leaves and errors. Pre-order visits nodes in non-decreasing start order,
-    // so one forward pass over the sorted comments finds each comment node.
-    let mut comments: Vec<(usize, usize)> = facts
-        .matches
-        .iter()
-        .flat_map(|m| m.comments.iter().map(|c| (c.0, c.1)))
-        .collect();
-    comments.sort_unstable();
-    comments.dedup();
-    let mut pending = comments.iter().peekable();
-    let has_errors = tree.root_node().has_error();
-    let mut comment_depth = None; // depth of the comment node we are inside
-    for (n, depth, copied) in walked {
-        let (start, end) = (n.start_byte(), n.end_byte());
-        if comment_depth.is_some_and(|d| depth <= d) {
-            comment_depth = None;
-        }
-        if has_errors {
-            facts.errors += usize::from(n.is_error() || n.is_missing());
-        }
-        if comment_depth.is_none() {
-            while pending.next_if(|c| c.0 < start).is_some() {}
-            if pending.next_if_eq(&&(start, end)).is_some() {
-                comment_depth = Some(depth);
-            }
-        }
-        if comment_depth.is_some() {
-            continue;
-        }
-        match (copied, old) {
-            (Some((shift, was)), Some((old, _))) => {
-                let from = old.leaves.partition_point(|l| l.0 < was.start);
-                let b = |x: usize| moved(x, shift);
-                facts.leaves.extend(
-                    old.leaves[from..]
-                        .iter()
-                        .take_while(|l| l.1 <= was.end)
-                        .map(|l| (b(l.0), b(l.1), l.2)),
-                );
-            }
-            _ if n.child_count() == 0 && start < end => {
-                facts.leaves.push((start, end, n.kind_id()))
-            }
-            _ => {}
-        }
-    }
     assert!(
         facts.leaves.windows(2).all(|w| w[0].1 <= w[1].0),
         "leaves are disjoint and ordered"
@@ -427,6 +410,10 @@ fn matched(query: &'static Query, src: &[u8], root: Node, captures: &[QueryCaptu
     for c in captures {
         match query.capture_names()[c.index as usize] {
             "comment" => {
+                assert!(
+                    c.node == root,
+                    "a query captures @comment at its pattern's root"
+                );
                 let words = text(c.node).split_whitespace().count();
                 m.comments
                     .push((c.node.start_byte(), c.node.end_byte(), words));
