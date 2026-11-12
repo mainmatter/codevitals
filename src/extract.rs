@@ -44,7 +44,8 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
     // Comments as (start, end) -> word count, and spans keyed by identity
     // (kind, start, end), ordered by position with outer spans first.
     let mut comments = BTreeMap::new();
-    let mut spans = BTreeMap::<_, (Node, Option<Node>, Option<Node>)>::new();
+    let mut spans = BTreeMap::<_, Captured>::new();
+    let mut attributes = Vec::new();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), src);
     while let Some(m) = matches.next() {
@@ -57,16 +58,36 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
                 }
                 "name" => name = name.or(Some(c.node)),
                 "params" => params = params.or(Some(c.node)),
+                "attr" => attributes.push(c.node),
                 private if private.starts_with('_') => {} // query-internal, e.g. for predicates
                 kind => span = span.or(Some((kind, c.node))),
             }
         }
         if let Some((kind, node)) = span {
             let key = (node.start_byte(), Reverse(node.end_byte()), kind);
-            let merged = spans.entry(key).or_insert((node, None, None));
-            merged.1 = merged.1.or(name);
-            merged.2 = merged.2.or(params);
+            let merged = spans.entry(key).or_insert(Captured::of(node));
+            merged.name = merged.name.take().or(name.map(text));
+            merged.params = merged.params.or(params);
         }
+    }
+    // Code compiled only for tests: each test attribute's item, attributes included.
+    for attr in attributes {
+        let Some((gate, range)) = test_gate(attr, &text) else {
+            continue;
+        };
+        let (kind, name) = match gate.iter().any(Vec::is_empty) {
+            true => ("test", None),
+            false => ("test_if", Some(dnf_text(&gate))),
+        };
+        let key = (range.start.0, Reverse(range.end.0), kind);
+        let merged = spans.entry(key).or_insert(Captured {
+            start: range.start,
+            end: range.end,
+            node: None,
+            name: None,
+            params: None,
+        });
+        merged.name = merged.name.take().or(name);
     }
 
     let is_comment = |n: Node| comments.contains_key(&(n.start_byte(), n.end_byte()));
@@ -167,20 +188,22 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
     // form a stack of end offsets: a span's depth is how many of them are still open.
     let mut open = HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
-    for ((_, _, kind), (node, name, params)) in spans {
-        let mut s = span(
-            kind,
-            node.byte_range(),
-            node.start_position(),
-            node.end_position(),
-        );
+    for ((_, _, kind), captured) in spans {
+        let Captured {
+            start: (start, start_point),
+            end: (end, end_point),
+            node,
+            name,
+            params,
+        } = captured;
+        let mut s = span(kind, start..end, start_point, end_point);
         let stack = open.entry(kind).or_default();
-        while stack.last().is_some_and(|&end| end <= node.start_byte()) {
+        while stack.last().is_some_and(|&open_end| open_end <= start) {
             stack.pop();
         }
         s.depth = int(stack.len());
-        stack.push(node.end_byte());
-        s.name = name.map(text);
+        stack.push(end);
+        s.name = name;
         s.params = params.map(|p| {
             int(p
                 .named_children(&mut p.walk())
@@ -189,6 +212,7 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         });
         if kind == "import" {
             // One span per imported path, all over the statement's bytes.
+            let node = node.expect("imports are captured nodes");
             for target in import_targets(node, &text) {
                 out.push(Span {
                     name: Some(target),
@@ -200,6 +224,201 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
         }
     }
     out
+}
+
+/// When code is test code: a disjunction of conjunctions of feature names.
+type Gate = Vec<Vec<String>>;
+
+/// A span to emit: its start and end (byte and point), the node it was captured
+/// as (none for test spans, which start at an attribute and end with its item),
+/// its name and its parameter list.
+struct Captured<'tree> {
+    start: (usize, Point),
+    end: (usize, Point),
+    node: Option<Node<'tree>>,
+    name: Option<String>,
+    params: Option<Node<'tree>>,
+}
+
+impl<'tree> Captured<'tree> {
+    fn of(node: Node<'tree>) -> Self {
+        Captured {
+            start: (node.start_byte(), node.start_position()),
+            end: (node.end_byte(), node.end_position()),
+            node: Some(node),
+            name: None,
+            params: None,
+        }
+    }
+}
+
+/// When the code a Rust attribute applies to is compiled only for tests, as a
+/// disjunction of conjunctions of feature names (an empty conjunction: always test
+/// code), and that code's range. Test attributes are `#[test]`-style attributes
+/// (`#[test]`, `#[tokio::test]`, `#[bench]`, `#[rstest]`, ...) and `#[cfg(P)]` where P
+/// is false whenever `test` is: `test`, `all(test, ..)`, or a feature that the SQL
+/// then decides is test-only (`test_feature` in helpers.sql, or declared in
+/// .gitattributes). An outer attribute applies to the next item, a sibling in the
+/// syntax tree; an inner one (`#![cfg(test)]`) to the item or file containing it.
+fn test_gate(attr: Node, text: &impl Fn(Node) -> String) -> Option<(Gate, Range<(usize, Point)>)> {
+    let attribute = attr.named_child(0).filter(|a| a.kind() == "attribute")?;
+    let path = text(attribute.named_child(0)?);
+    let last = path.rsplit("::").next().unwrap_or_default();
+    let gate = if path == "cfg" {
+        let arguments = text(attribute.child_by_field_name("arguments")?);
+        let mut tokens = cfg_tokens(&arguments).into_iter().peekable();
+        if tokens.next().as_deref() != Some("(") {
+            return None;
+        }
+        cfg_predicate(&mut tokens)?
+    } else if [
+        "test",
+        "bench",
+        "rstest",
+        "quickcheck",
+        "proptest",
+        "test_case",
+    ]
+    .contains(&last)
+        || last.ends_with("_test")
+    {
+        vec![vec![]]
+    } else {
+        return None;
+    };
+    if gate.is_empty() {
+        return None;
+    }
+    let range = if attr.kind() == "inner_attribute_item" {
+        let parent = attr.parent()?;
+        let item = match parent.kind() {
+            "source_file" => parent,
+            _ => parent
+                .parent()
+                .filter(|p| p.kind() != "source_file")
+                .unwrap_or(parent),
+        };
+        let start = match item.kind() {
+            "source_file" => (0, Point::new(0, 0)),
+            _ => (item.start_byte(), item.start_position()),
+        };
+        start..(item.end_byte(), item.end_position())
+    } else {
+        let mut item = attr.next_named_sibling()?;
+        while item.kind().ends_with("attribute_item") || item.kind().ends_with("comment") {
+            item = item.next_named_sibling()?;
+        }
+        (attr.start_byte(), attr.start_position())..(item.end_byte(), item.end_position())
+    };
+    Some((gate, range))
+}
+
+/// The tokens of a `cfg` predicate: identifiers, string literals, `(`, `)`, `,`, `=`.
+fn cfg_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                let mut s = String::new();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => s.extend(chars.next()),
+                        c => s.push(c),
+                    }
+                }
+                tokens.push(format!("\"{s}"));
+            }
+            '(' | ')' | ',' | '=' => tokens.push(c.to_string()),
+            c if c.is_whitespace() => {}
+            c => {
+                let mut word = c.to_string();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() || "()=,\"".contains(c) {
+                        break;
+                    }
+                    word.push(c);
+                    chars.next();
+                }
+                tokens.push(word);
+            }
+        }
+    }
+    tokens
+}
+
+/// Most conjunctions a test gate keeps; a larger one counts as production code.
+const MAX_GATE_TERMS: usize = 16;
+
+/// One `cfg` predicate, as the condition on test-only features under which it is
+/// false without `test`: a disjunction of conjunctions, empty when it can be true in
+/// a production build whatever the features. Consumes the predicate and the `,` or
+/// `)` after it; `None` when the predicate does not parse.
+fn cfg_predicate(tokens: &mut std::iter::Peekable<impl Iterator<Item = String>>) -> Option<Gate> {
+    let word = tokens.next()?;
+    let gate = match tokens.peek().map(String::as_str) {
+        Some("(") => {
+            tokens.next();
+            let mut parts = Vec::new();
+            while tokens.peek().map(String::as_str) != Some(")") {
+                parts.push(cfg_predicate(tokens)?);
+                if tokens.peek().map(String::as_str) == Some(",") {
+                    tokens.next();
+                }
+            }
+            tokens.next();
+            match word.as_str() {
+                // all(..) is test-only when any part is.
+                "all" => parts.into_iter().flatten().collect(),
+                // any(..) is test-only when every part is.
+                "any" if !parts.is_empty() => {
+                    parts.into_iter().try_fold(vec![vec![]], |acc, part| {
+                        let product: Vec<Vec<String>> = acc
+                            .iter()
+                            .flat_map(|a| part.iter().map(move |p| [a.clone(), p.clone()].concat()))
+                            .collect();
+                        (product.len() <= MAX_GATE_TERMS).then_some(product)
+                    })?
+                }
+                // not(..) and unknown predicates: assume a production build can satisfy them.
+                _ => vec![],
+            }
+        }
+        Some("=") => {
+            tokens.next();
+            let value = tokens.next()?;
+            match (word.as_str(), value.strip_prefix('"')) {
+                ("feature", Some(feature)) => vec![vec![feature.to_owned()]],
+                _ => vec![],
+            }
+        }
+        _ if word == "test" => vec![vec![]],
+        _ => vec![],
+    };
+    let mut gate: Gate = gate
+        .into_iter()
+        .map(|mut c| {
+            c.sort();
+            c.dedup();
+            c
+        })
+        .collect();
+    gate.sort();
+    gate.dedup();
+    if gate.iter().any(Vec::is_empty) {
+        gate = vec![vec![]];
+    }
+    (gate.len() <= MAX_GATE_TERMS).then_some(gate)
+}
+
+/// A test gate as `test_if` spans name it: conjunctions joined by `|`, their features
+/// by `&` (characters no cargo feature name contains).
+fn dnf_text(gate: &[Vec<String>]) -> String {
+    gate.iter()
+        .map(|c| c.join("&"))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 /// The paths an import statement names, one per target, as written: Rust use trees

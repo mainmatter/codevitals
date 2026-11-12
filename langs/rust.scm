@@ -10,3 +10,5 @@
 (static_item (mutable_specifier)) @global_state
 (macro_invocation macro: (identifier) @_m (#match? @_m "^(panic|unreachable|todo|unimplemented)$")) @throw
 (call_expression function: (field_expression field: (field_identifier) @_f) (#match? @_f "^(unwrap|expect)$")) @throw
+(mod_item name: (identifier) @name !body) @mod_decl
+[(attribute_item) (inner_attribute_item)] @attr

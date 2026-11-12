@@ -112,13 +112,16 @@ pub fn walk(
                 attributes.set(path, blob.as_deref().map(read).transpose()?);
             }
             for (path, blob) in &rows {
-                let attr = match blob {
-                    Some(_) => attributes
-                        .role(path)
-                        .with_context(|| format!("commit {id}"))?,
-                    None => None,
+                let (attr, test_features) = match blob {
+                    Some(_) => (
+                        attributes
+                            .role(path)
+                            .with_context(|| format!("commit {id}"))?,
+                        attributes.test_features(path),
+                    ),
+                    None => (None, None),
                 };
-                changed.append_row(params![seq, path, blob, attr])?;
+                changed.append_row(params![seq, path, blob, attr, test_features])?;
             }
             debug!(seq, %id, changes = rows.len(), elapsed = ?diffing.elapsed(), "commit");
             seq += 1;

@@ -8,6 +8,10 @@ create or replace macro rework_days() as 7;     -- days within which a repeat ch
 create or replace macro clone_tokens() as 50;   -- smallest function counted by duplication
 create or replace macro large_tokens() as 200;  -- functions above this count toward concentration
 create or replace macro deep_nesting() as 3;    -- functions nested deeper than this count as deeply nested
+-- Cargo features whose code counts as test code by name alone (more may be declared
+-- per path in .gitattributes: codevitals-test-features=a,b).
+create or replace macro test_feature(f) as
+  regexp_full_match(f, '(?i)(_*tests?|testing|test[-_]?(utils?|support|helpers?|fixtures?|mocks?)|__.*test.*)');
 
 -- ============ helpers ============
 -- A mean's 95% confidence band: two standard errors.
@@ -51,6 +55,44 @@ create or replace macro lang_family(lang) as
 create or replace macro family_ratio(num, den, lang, fam) as
   sum(num) filter (lang_family(lang) = fam) / nullif(sum(den) filter (lang_family(lang) = fam), 0);
 
+-- Whether a `test_if` span's code is test code: `gate` (conjunctions joined by `|`,
+-- features by `&`) holds when every feature of some conjunction is test-only, by
+-- name or because `declared` (features joined by `,`) lists it.
+create or replace macro test_gate(gate, declared) as
+  list_bool_or(list_transform(string_split(gate, '|'), lambda c:
+    list_bool_and(list_transform(string_split(c, '&'), lambda f:
+      test_feature(f) or list_contains(string_split(declared, ','), f)))));
+
+-- Every blob with the test features declared where it occurs ('' for none): blob
+-- facts depend on both.
+create or replace view blob_inputs as
+select distinct blob, test_features from files;
+
+-- The outermost ranges of each blob compiled only for tests (Rust #[cfg(test)],
+-- #[test] functions, code behind test-only features), under its declared features.
+create or replace view test_ranges as
+with t as (
+  select distinct i.blob, i.test_features, s.start_byte, s.end_byte, s.tokens
+  from blob_inputs i join spans s on s.blob = i.blob
+  where s.kind = 'test' or (s.kind = 'test_if' and test_gate(s.name, i.test_features)))
+select * from t a
+where not exists (
+  select 1 from t b
+  where b.blob = a.blob and b.test_features = a.test_features
+    and b.start_byte <= a.start_byte and b.end_byte >= a.end_byte
+    and (b.start_byte < a.start_byte or b.end_byte > a.end_byte));
+
+-- Spans of production code: every span outside the blob's test ranges (the `file`
+-- span always stays), per blob and declared test features.
+create or replace view code_spans as
+select i.test_features, s.*
+from blob_inputs i join spans s on s.blob = i.blob
+where s.kind not in ('test', 'test_if')
+  and (s.kind = 'file' or not exists (
+    select 1 from test_ranges t
+    where t.blob = s.blob and t.test_features = i.test_features
+      and t.start_byte <= s.start_byte and s.end_byte <= t.end_byte));
+
 -- Each path's role, from its newest version: what .gitattributes declare (`code`:
 -- first-party whatever the conventions), else conventions, case aside.
 create or replace view path_roles as
@@ -63,6 +105,19 @@ with p as (
   left join spans s on s.blob = c.blob and s.kind = 'file'
   left join spans g on g.blob = c.blob and g.kind = 'generated'
   group by c.path),
+-- Rust module files declared only for tests (`#[cfg(test)] mod x;`) by the newest
+-- version of a file:
+-- x.rs or x/mod.rs beside a mod.rs, lib.rs or main.rs, else in a directory named
+-- after the declaring file.
+test_modules as (
+  select distinct case when regexp_matches(f.path, '(^|/)(mod|lib|main)\.rs$')
+                       then concat_ws('/', nullif(directory(f.path), ''), m.name)
+                       else regexp_replace(f.path, '\.rs$', '') || '/' || m.name end as module
+  from files f
+  join spans m on m.blob = f.blob and m.kind = 'mod_decl'
+  join test_ranges t on t.blob = f.blob and t.test_features = f.test_features
+    and t.start_byte <= m.start_byte and m.end_byte <= t.end_byte
+  where f.since = (select max(since) from files g where g.path = f.path)),
 conventions as (
   select path, attr, case
     when coalesce(attr, '') <> 'code'
@@ -76,18 +131,19 @@ conventions as (
       then 'documentation'
     when regexp_matches(path, '(?i)(^|/)([^/]*[-_])?(tests?|testing|testsuite|__tests__|__mocks__|specs?|testdata|test_data|fixtures?|bench|benches|benchmarks?|e2e|fuzz)/')
       or regexp_matches(path, '(?i)(^|/)(test_[^/]*|[^/]*[-_.](test|tests|spec))\.[A-Za-z0-9]+$')
+      or regexp_replace(path, '(/mod)?\.rs$', '') in (select module from test_modules)
       then 'test'
     when parsed and family(path) is not null then 'code'
     else 'other' end as role
   from p)
 select path, if(attr is not null and attr <> 'code', attr, role) as role from conventions;
 
-comment on view path_roles is 'Each path''s role: code (production), test, vendored, generated, documentation or other. What the repository''s .gitattributes declare wins (linguist-vendored, linguist-generated, linguist-documentation, codevitals=<role>); otherwise path conventions, generation markers and minified JavaScript decide. Tests inside source files (Rust #[cfg(test)] modules) count as code.';
+comment on view path_roles is 'Each path''s role: code (production), test, vendored, generated, documentation or other. What the repository''s .gitattributes declare wins (linguist-vendored, linguist-generated, linguist-documentation, codevitals=<role>); otherwise path conventions, generation markers and minified JavaScript decide. A Rust file declared only for tests (#[cfg(test)] mod x;) is test; test code inside a production file is subtracted from its facts (code_spans).';
 
 -- File versions as [since, until). Per-commit totals add a version's facts at since,
 -- remove them at until and sum: cost grows with changes, not commits times code.
 create or replace view versions as
-  select path, blob, since, least(until, (select max(seq) + 1 from commits)) as until
+  select path, blob, test_features, since, least(until, (select max(seq) + 1 from commits)) as until
   from files;
 
 -- Commit times for windows and ages: each the median of itself and its neighbours
@@ -123,10 +179,11 @@ select win, seq,
 from members
 qualify span_weeks <= window_max_weeks();
 
--- Additive structure facts per blob. Nesting: deepest block minus the body block.
+-- Additive structure facts per blob and declared test features, production code only
+-- (code_spans). Nesting: deepest block minus the body block.
 create or replace view blob_facts as
 with nesting as (
-  select f.blob, any_value(f.tokens) as tokens,
+  select f.blob, f.test_features, any_value(f.tokens) as tokens,
          -- Syntactic visibility: pub/export markers, C/C++ not static, Python no `_`.
          any_value(case when f.lang in ('c', 'cpp')
                           then (f.blob, f.start_byte, f.end_byte) not in (select blob, start_byte, end_byte from spans where kind = 'static')
@@ -134,34 +191,42 @@ with nesting as (
                         else (f.blob, f.start_byte, f.end_byte) in (select blob, start_byte, end_byte from spans where kind = 'pub')
                    end) as public,
          coalesce(max(b.depth) - min(b.depth), 0) as nesting
-  from spans f
+  from code_spans f
   left join spans b on b.blob = f.blob and b.kind = 'block'
     and b.start_byte >= f.start_byte and b.end_byte <= f.end_byte
   where f.kind = 'fn'
-  group by f.blob, f.start_byte, f.end_byte),
+  group by f.blob, f.test_features, f.start_byte, f.end_byte),
 functions as (
-  select blob, sum(tokens) as fn_tokens, sum(tokens * nesting) as nested_tokens,
+  select blob, test_features, sum(tokens) as fn_tokens, sum(tokens * nesting) as nested_tokens,
          coalesce(sum(tokens) filter (nesting > deep_nesting()), 0) as deep_tokens,
          coalesce(sum(tokens) filter (not public), 0) as private_tokens,
          coalesce(sum(tokens) filter (tokens > large_tokens()), 0) as large_tokens
-  from nesting group by blob),
+  from nesting group by blob, test_features),
+tests as (
+  select blob, test_features, sum(tokens) as test_tokens from test_ranges group by all),
 counts as (
-  select blob, any_value(lang) as lang, 1 as files,
+  select blob, test_features, any_value(lang) as lang,
     coalesce(sum(tokens) filter (kind = 'file'), 0) as tokens,
     count(*) filter (kind in ('branch', 'condition')) as decisions,
     count(*) filter (kind = 'global_state') as global_state,
     count(*) filter (kind = 'throw') as throws,
     count(*) filter (kind = 'goto') as gotos
-  from spans group by blob)
-select c.*, coalesce(columns(f.* exclude (blob)), 0)
-from counts c left join functions f using (blob);
+  from code_spans group by blob, test_features)
+select c.blob, c.test_features, c.lang,
+       -- A file that is test code throughout is no production file.
+       if(c.tokens > 0 and c.tokens = coalesce(t.test_tokens, 0), 0, 1) as files,
+       c.tokens - coalesce(t.test_tokens, 0) as tokens,
+       c.* exclude (blob, test_features, lang, tokens),
+       coalesce(columns(f.* exclude (blob, test_features)), 0)
+from counts c left join functions f using (blob, test_features)
+left join tests t using (blob, test_features);
 
 -- Production totals per commit and language, from blob_facts by change points.
 create or replace view code_totals as
 with v as (
-  select v.since, v.until, f.* exclude (blob)
+  select v.since, v.until, f.* exclude (blob, test_features)
   from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join blob_facts f using (blob)),
+  join blob_facts f using (blob, test_features)),
 deltas as (
   select seq, lang, sum(columns(* exclude (seq, lang))) from (
     select since as seq, lang, columns(* exclude (since, until, lang)) from v

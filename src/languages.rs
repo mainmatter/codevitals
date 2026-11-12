@@ -18,13 +18,19 @@ pub struct Lang {
 }
 
 /// Every span kind a query may capture, besides `file`, which every blob gets. The
-/// helper captures `@comment`, `@name`, `@params` and `@_*` (for predicates) create
+/// helper captures `@comment`, `@name`, `@params`, `@attr` (attributes, which may
+/// mark test code) and `@_*` (for predicates) create
 /// no span. A query capturing anything else fails to compile, so a typo cannot
 /// silently create a kind no SQL reads.
 #[rustfmt::skip]
 pub const KINDS: &[&str] = &[
     "fn", "call", "import", "module", "pub", "static", "branch", "condition", "block",
     "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
+    // Rust: a module declared without a body (`mod x;`), whose code is in another file.
+    "mod_decl",
+    // Not captured by a query: code compiled only for tests (`test`), or only when
+    // test-only features are on (`test_if`, named by the features), from `@attr`.
+    "test", "test_if",
     // Not captured by a query: codevitals marks a blob of generated code with it.
     "generated",
 ];
@@ -84,7 +90,7 @@ impl Lang {
                 let query = Query::new(&(l.grammar)(), l.query).expect("query compiles");
                 for capture in query.capture_names() {
                     assert!(
-                        ["comment", "name", "params"].contains(capture)
+                        ["comment", "name", "params", "attr"].contains(capture)
                             || capture.starts_with('_')
                             || KINDS.contains(capture),
                         "the {} query captures @{capture}, which is not in KINDS",

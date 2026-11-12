@@ -397,10 +397,10 @@ fn change_points_match_per_commit_sums() {
     r.extend("rename rust\n", 9);
     scan(&r.dir, "main");
     // Every fact of every live production file, summed commit by commit.
-    let naive = "select c.seq, f.lang, sum(columns(f.* exclude (blob, lang)))
+    let naive = "select c.seq, f.lang, sum(columns(f.* exclude (blob, test_features, lang)))
          from commits c join files l on l.since <= c.seq and c.seq < l.until
          join path_roles p on p.path = l.path and p.role = 'code'
-         join blob_facts f on f.blob = l.blob
+         join blob_facts f on f.blob = l.blob and f.test_features = l.test_features
          group by all order by all";
     let expected = rows(&r.dir, naive);
     let actual = rows(&r.dir, "select * from code_totals order by all");
@@ -605,5 +605,46 @@ fn commit_times_drop_a_lone_wrong_clock() {
         &dir,
         "select seq, time::date from commit_times order by seq",
         "(0,2026-01-01) (1,2026-01-01) (2,2026-01-03) (3,2026-01-05) (4,2026-01-05) (5,2026-01-05)",
+    );
+}
+
+/// Rust test code inside production files is subtracted from their facts: a
+/// `#[cfg(test)]` module, a `#[test]` function, code behind a feature that is
+/// test-only by name or declared so in .gitattributes. A module file declared only
+/// for tests (`#[cfg(test)] mod testutil;`) is test code as a whole.
+#[test]
+fn rust_test_code_is_not_production() {
+    let production =
+        "pub fn f(x: Option<i32>) -> i32 {\n    if x.is_some() { x.unwrap() } else { 0 }\n}\n";
+    let tests = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { if true { super::f(None); } let _ = Some(1).unwrap(); }\n}\n\
+                 #[cfg(feature = \"test-util\")]\nfn util() { panic!(); }\n\
+                 #[cfg(feature = \"mock\")]\nfn mocked() { if true { panic!(); } }\n\
+                 #[cfg(test)]\nmod testutil;\n";
+    let mut r = common::Repo::new();
+    r.write("src/plain.rs", production)
+        .write("src/lib.rs", format!("{production}{tests}"))
+        .write("src/testutil.rs", "pub fn helper() { todo!() }\n")
+        .write("mock/src/lib.rs", format!("{production}{tests}"))
+        .write(".gitattributes", "mock/** codevitals-test-features=mock\n");
+    r.commit("main", "c0\n", 0, &[]);
+    scan(&r.dir, "main");
+    let facts = "select r.path, f.files, f.tokens, f.decisions, f.throws, f.fn_tokens
+         from files v join path_roles r using (path)
+         join blob_facts f on f.blob = v.blob and f.test_features = v.test_features
+         where r.role = 'code' order by r.path";
+    let plain = rows(
+        &r.dir,
+        &facts.replace("where", "where r.path = 'src/plain.rs' and"),
+    );
+    let plain = plain.trim_start_matches("(src/plain.rs,");
+    // lib.rs keeps `mocked` (mock is not test-only there); mock/src/lib.rs drops it too.
+    assert_eq!(
+        rows(&r.dir, facts),
+        format!("(mock/src/lib.rs,{plain} (src/lib.rs,1,58,2,2,47) (src/plain.rs,{plain}")
+    );
+    assert_rows(
+        &r.dir,
+        "select path, role from path_roles where path like 'src/test%'",
+        "(src/testutil.rs,test)",
     );
 }

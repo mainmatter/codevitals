@@ -443,6 +443,74 @@ branch 10 0 6
     }
 }
 
+/// Rust code compiled only for tests: `test` spans over `#[cfg(test)]` items and
+/// `#[test]`-style functions, attributes included; `test_if` spans, named by the
+/// features that would make them test code, over feature-gated items.
+#[test]
+fn rust_test_code() {
+    let src = r#"fn prod() {}
+#[cfg(test)]
+// helpers
+#[allow(dead_code)]
+mod tests {
+    #[tokio::test]
+    async fn t() { x.unwrap(); }
+}
+#[test] fn bare() {}
+#[cfg(feature = "test-util")] pub fn util() {}
+#[cfg(any(test, feature = "x"))] fn either() {}
+#[cfg(all(unix, any(feature = "a", feature = "b"), not(test)))] fn gated() {}
+#[cfg(any(test, unix))] fn not_test() {}
+#[cfg(all(feature = "a", feature = "b"))] fn both() {}
+#[cfg(not(test))] fn production() {}
+#[cfg_attr(test, derive(Debug))] struct S;
+#[cfg(test)] mod testutil;
+mod other;
+"#;
+    let spans = extract(Lang::of("x.rs").unwrap(), src.as_bytes());
+    let tests: Vec<String> = spans
+        .iter()
+        .filter(|s| ["test", "test_if", "mod_decl"].contains(&s.kind))
+        .map(|s| {
+            let text = &src[s.start_byte as usize..s.end_byte as usize];
+            let first = text.lines().next().unwrap();
+            format!(
+                "{} {} {} {}: {first}",
+                s.kind,
+                s.name.as_deref().unwrap_or("-"),
+                s.line,
+                s.end_line
+            )
+        })
+        .collect();
+    assert_eq!(
+        tests,
+        [
+            "test - 2 8: #[cfg(test)]",
+            "test - 6 7: #[tokio::test]",
+            "test - 9 9: #[test] fn bare() {}",
+            "test_if test-util 10 10: #[cfg(feature = \"test-util\")] pub fn util() {}",
+            "test_if x 11 11: #[cfg(any(test, feature = \"x\"))] fn either() {}",
+            // any(..) is test-only when every part is, all(..) when one part is.
+            "test_if a&b 12 12: #[cfg(all(unix, any(feature = \"a\", feature = \"b\"), not(test)))] fn gated() {}",
+            "test_if a|b 14 14: #[cfg(all(feature = \"a\", feature = \"b\"))] fn both() {}",
+            "test - 17 17: #[cfg(test)] mod testutil;",
+            "mod_decl testutil 17 17: mod testutil;",
+            "mod_decl other 18 18: mod other;",
+        ]
+    );
+    // An inner attribute makes the whole file (or module) test code.
+    let spans = extract(
+        Lang::of("x.rs").unwrap(),
+        b"//! doc\n#![cfg(test)]\nfn t() {}\n",
+    );
+    let test = spans.iter().find(|s| s.kind == "test").unwrap();
+    assert_eq!(
+        (test.start_byte, test.end_byte, test.tokens),
+        (0, 32, spans[0].tokens)
+    );
+}
+
 /// Empty input gives one `file` span in every language (compiling every query, which
 /// checks their captures); broken input counts its parse errors.
 #[test]

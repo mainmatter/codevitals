@@ -62,7 +62,15 @@ documentation. Path conventions decide, unless `.gitattributes` says otherwise:
 third_party/**   linguist-vendored
 src/proto/**     linguist-generated
 integration/**   codevitals=test
+crates/db/**     codevitals-test-features=mock-io,fixtures
 ```
+
+Rust test code inside source files does not count either: `#[cfg(test)]` items,
+`#[test]`-style functions (`#[tokio::test]`, `#[rstest]`, ...), modules declared with
+`#[cfg(test)] mod x;`, and code behind test-only cargo features. A feature is
+test-only when its name says so (`test`, `testing`, `test-util`, `test-support`, ...;
+`test_feature` in `sql/helpers.sql`) or when `codevitals-test-features` declares it
+for the path, as above.
 
 ## Caveats
 
@@ -70,7 +78,6 @@ integration/**   codevitals=test
   repository, not absolute values.
 - codevitals reads syntax, not build files: imports are resolved by convention, and
   re-exports, macros and paths used without an import are not followed.
-- Tests inside source files (Rust `#[cfg(test)]`) count as production code.
 - codevitals needs the full history: deepen shallow clones first.
 
 ## Development

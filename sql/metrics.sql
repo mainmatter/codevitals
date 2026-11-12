@@ -120,7 +120,8 @@ create or replace view metrics.duplication as
 with f as (
   select v.since, v.until, s.lang, s.hash, s.tokens
   from versions v join path_roles r on r.path = v.path and r.role = 'code'
-  join spans s on s.blob = v.blob and s.kind = 'fn' and s.tokens >= clone_tokens()),
+  join code_spans s on s.blob = v.blob and s.test_features = v.test_features
+    and s.kind = 'fn' and s.tokens >= clone_tokens()),
 d as (
   select lang, hash, seq, sum(n) as n, sum(t) as t
   from (select lang, hash, since as seq, 1 as n, tokens as t from f
