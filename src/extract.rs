@@ -474,25 +474,32 @@ fn fingerprints(lang: Lang, src: &[u8], leaves: &[(usize, usize, u16)]) -> Vec<S
     if leaves.len() < CLONE_K || lang.exts.is_empty() {
         return vec![];
     }
-    let hashes: Vec<u64> = leaves
-        .windows(CLONE_K)
-        .map(|w| {
-            let mut bytes = lang.name.as_bytes().to_vec();
-            for l in w {
-                bytes.extend(l.2.to_le_bytes());
-            }
-            xxh3_64(&bytes)
-        })
-        .collect();
-    let line_starts: Vec<usize> = std::iter::once(0)
-        .chain(
-            src.iter()
-                .enumerate()
-                .filter(|(_, b)| **b == b'\n')
-                .map(|(i, _)| i + 1),
-        )
-        .collect();
-    let line = |byte: usize| int(line_starts.partition_point(|&s| s <= byte));
+    // A polynomial rolling hash over the windows' node kinds: one multiply-add per
+    // token, not a hash of every window's bytes. Mixed afterwards, so winnowing's
+    // minimum is uniform.
+    const BASE: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mix = |mut z: u64| {
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seed = xxh3_64(lang.name.as_bytes());
+    let token = |l: &(usize, usize, u16)| mix(seed ^ u64::from(l.2));
+    let top = (1..CLONE_K).fold(1u64, |p, _| p.wrapping_mul(BASE)); // BASE^(K-1)
+    let mut rolling = leaves[..CLONE_K]
+        .iter()
+        .fold(0u64, |h, l| h.wrapping_mul(BASE).wrapping_add(token(l)));
+    let mut hashes = Vec::with_capacity(leaves.len() - CLONE_K + 1);
+    hashes.push(mix(rolling));
+    for i in CLONE_K..leaves.len() {
+        rolling = rolling
+            .wrapping_sub(token(&leaves[i - CLONE_K]).wrapping_mul(top))
+            .wrapping_mul(BASE)
+            .wrapping_add(token(&leaves[i]));
+        hashes.push(mix(rolling));
+    }
+    let starts = line_starts(src);
+    let line = |byte: usize| line_of(&starts, byte);
     let mut picked: Vec<usize> = Vec::new();
     let w = CLONE_W.min(hashes.len());
     for start in 0..=hashes.len() - w {

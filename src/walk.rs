@@ -10,6 +10,7 @@ use duckdb::types::{TimeUnit, Value};
 use duckdb::{Connection, OptionalExt, params};
 use gix::ObjectId;
 use gix::object::tree::diff::ChangeDetached as Change;
+use rayon::prelude::*;
 use tracing::{debug, info};
 
 use codevitals::Lang;
@@ -83,25 +84,35 @@ pub fn walk(
 
     let mut changes = 0;
     let mut seq = stored;
+    let shared = repo.clone().into_sync();
     for batch in chain.rchunks(BATCH) {
         // Appenders join the open transaction, so each commit row and its changes land together.
         let tx = db.transaction()?;
         let mut commits = tx.appender("commits")?;
         let mut changed = tx.appender("changes")?;
-        for &id in batch.iter().rev() {
-            let diffing = Instant::now();
-            let commit = find(id)?;
-            let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
-            let (time, name, email, message) = (|| -> Result<_> {
-                let author = commit.author()?;
-                Ok((
-                    Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
-                    author.name.to_string(),
-                    author.email.to_string(),
-                    commit.message_raw()?.to_string(),
-                ))
-            })()
-            .with_context(|| format!("read commit {id}"))?;
+        // Commits diff independently, so in parallel, each worker with its own handle;
+        // rows are then appended in order, as .gitattributes carry over between commits.
+        let diffed: Vec<Diffed> = batch
+            .par_iter()
+            .rev()
+            .map_init(
+                || shared.to_thread_local(),
+                |repo, &id| -> Result<Diffed> {
+                    let commit = repo.find_commit(id)?;
+                    let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
+                    let author = commit.author()?;
+                    Ok((
+                        id,
+                        rows,
+                        Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
+                        author.name.to_string(),
+                        author.email.to_string(),
+                        commit.message_raw()?.to_string(),
+                    ))
+                },
+            )
+            .collect::<Result<_>>()?;
+        for (id, rows, time, name, email, message) in diffed {
             commits.append_row(params![seq, id.to_string(), time, name, email, message])?;
             for (path, row) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
                 attributes.set(path, row.blob.as_deref().map(read).transpose()?);
@@ -134,7 +145,7 @@ pub fn walk(
                     deleted
                 ])?;
             }
-            debug!(seq, %id, changes = rows.len(), elapsed = ?diffing.elapsed(), "commit");
+            debug!(seq, %id, changes = rows.len(), "commit");
             seq += 1;
             changes += rows.len();
         }
@@ -190,6 +201,16 @@ fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Resul
     tx.commit()?;
     Ok(count)
 }
+
+/// A diffed commit: its id, changes, time, author name and email, and message.
+type Diffed = (
+    ObjectId,
+    BTreeMap<String, Row>,
+    Value,
+    String,
+    String,
+    String,
+);
 
 /// A commit's change to one path.
 #[derive(Default)]

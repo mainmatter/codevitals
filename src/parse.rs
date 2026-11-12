@@ -33,7 +33,7 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     let paths: Vec<(String, String)> = db
         .prepare(
             "select distinct blob, path from changes
-             where blob is not null and blob not in (select blob from spans)
+             where blob in (select blob from parse_candidates) and blob not in (select blob from spans)
              order by blob, path",
         )?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?

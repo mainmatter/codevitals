@@ -234,7 +234,8 @@ fn history_errors_say_what_to_do() {
 
 /// Content that is not source code gets a `file` row with NULL counts: blobs over
 /// 1 MiB, binary files, Git LFS pointers and minified code. An empty file is parsed in
-/// the language of its first path with a known extension.
+/// the language of its first path with a known extension. Files that only ever sit
+/// at test, vendored, generated or documentation paths are not parsed at all.
 #[test]
 fn only_source_code_is_parsed() {
     let mut r = fixture();
@@ -255,7 +256,9 @@ fn only_source_code_is_parsed() {
             "lfs.rs",
             "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n",
         )
-        .write("app.min.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+        .write("app.js", format!("var a=1;{}\n", "a+=1;".repeat(4000)))
+        .write("tests/t.rs", "fn t() {}\n")
+        .write("vendor/v.c", "int v;\n")
         .write(".empty.txt", "")
         .write("pkg/__init__.py", "");
     r.extend("content\n", 5);
@@ -264,7 +267,7 @@ fn only_source_code_is_parsed() {
         &r.dir,
             "select c.path, s.lang, s.tokens from changes c join spans s on s.blob = c.blob and s.kind = 'file'
              where c.seq = 4 order by c.path",
-        "(.empty.txt,python,0) (app.min.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)",
+        "(.empty.txt,python,0) (app.js,javascript,NULL) (bin.rs,rust,NULL) (lfs.rs,rust,NULL) (pkg/__init__.py,python,0)",
     );
 }
 

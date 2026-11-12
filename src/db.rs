@@ -7,7 +7,7 @@ use duckdb::{AccessMode, Connection, OptionalExt};
 use gix::ObjectId;
 
 /// Extractor version. Bump whenever `extract` output could change for any input.
-pub const V: i32 = 8;
+pub const V: i32 = 9;
 /// Database layout version. Bump whenever a table changes; older databases are refused.
 pub const SCHEMA: i32 = 7;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its

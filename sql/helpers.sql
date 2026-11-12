@@ -112,6 +112,34 @@ select * from production_spans(['file', 'fn', 'scope', 'module', 'branch', 'cond
   'goto', 'global_state', 'invariant', 'unhandled', 'unfinished', 'forward', 'doc', 'vocabulary',
   'marker']);
 
+-- The role a path's name gives it, whatever its content: vendored, generated,
+-- documentation or test, unless .gitattributes declare it code (`attr`); NULL when
+-- the name says nothing. Parsing skips blobs whose every path has such a role.
+create or replace macro path_convention(path, attr) as case
+  when coalesce(attr, '') <> 'code'
+       and regexp_matches(path, '(?i)(^|/)(vendor|vendored|third_party|third-party|thirdparty|deps?|external|node_modules|bower_components)/')
+    then 'vendored'
+  when coalesce(attr, '') <> 'code'
+       and regexp_matches(path, '(?i)(\.min\.(js|mjs|cjs|css)$|(^|/)(dist|generated|__generated__)/|_pb2(_grpc)?\.py$|\.pb\.(h|cc|c|go|ts|js)$|[._]generated\.[a-z]+$)')
+    then 'generated'
+  when coalesce(attr, '') <> 'code'
+       and regexp_matches(path, '^([Dd]ocs?|[Dd]ocumentation|[Ee]xamples|[Dd]emos?|[Ss]amples?)/')
+    then 'documentation'
+  when regexp_matches(path, '(?i)(^|/)([^/]*[-_])?(tests?|testing|testsuite|__tests__|__mocks__|specs?|testdata|test_data|fixtures?|bench|benches|benchmarks?|e2e|fuzz)/')
+    or regexp_matches(path, '(?i)(^|/)(test_[^/]*|[^/]*[-_.](test|tests|spec))\.[A-Za-z0-9]+$')
+    then 'test' end;
+
+-- Blobs worth parsing: those with a path that may hold production code (neither its
+-- newest .gitattributes role nor its name rules that out). Test, vendored, generated
+-- and documentation files feed no metric.
+create or replace view parse_candidates as
+with newest as (
+  select path, arg_max(attr, seq) filter (blob is not null) as attr from changes group by path)
+select distinct c.blob
+from changes c join newest n using (path)
+where c.blob is not null
+  and coalesce(n.attr, 'code') = 'code' and path_convention(c.path, n.attr) is null;
+
 -- Each path's role, from its newest version: what .gitattributes declare (`code`:
 -- first-party whatever the conventions), else conventions, case aside.
 create or replace view path_roles as
@@ -139,19 +167,10 @@ test_modules as (
   where f.since = (select max(since) from files g where g.path = f.path)),
 conventions as (
   select path, attr, case
-    when coalesce(attr, '') <> 'code'
-         and regexp_matches(path, '(?i)(^|/)(vendor|vendored|third_party|third-party|thirdparty|deps?|external|node_modules|bower_components)/')
-      then 'vendored'
-    when coalesce(attr, '') <> 'code'
-         and (marked or regexp_matches(path, '(?i)(\.min\.(js|mjs|cjs|css)$|(^|/)(dist|generated|__generated__)/|_pb2(_grpc)?\.py$|\.pb\.(h|cc|c|go|ts|js)$|[._]generated\.[a-z]+$)'))
-      then 'generated'
-    when coalesce(attr, '') <> 'code'
-         and regexp_matches(path, '^([Dd]ocs?|[Dd]ocumentation|[Ee]xamples|[Dd]emos?|[Ss]amples?)/')
-      then 'documentation'
-    when regexp_matches(path, '(?i)(^|/)([^/]*[-_])?(tests?|testing|testsuite|__tests__|__mocks__|specs?|testdata|test_data|fixtures?|bench|benches|benchmarks?|e2e|fuzz)/')
-      or regexp_matches(path, '(?i)(^|/)(test_[^/]*|[^/]*[-_.](test|tests|spec))\.[A-Za-z0-9]+$')
-      or regexp_replace(path, '(/mod)?\.rs$', '') in (select module from test_modules)
-      then 'test'
+    when path_convention(path, attr) = 'vendored' then 'vendored'
+    when coalesce(attr, '') <> 'code' and marked then 'generated'
+    when path_convention(path, attr) is not null then path_convention(path, attr)
+    when regexp_replace(path, '(/mod)?\.rs$', '') in (select module from test_modules) then 'test'
     when parsed and family(path) is not null then 'code'
     else 'other' end as role
   from p)
