@@ -79,3 +79,26 @@ select l.k, l.cut, l.path, l.lineage, l.tokens, c.changes, c.fixes, l.decisions,
 from live l join counted c using (k, lineage) left join fns f using (k, lineage);
 
 comment on view units.defect_windows is 'Per cut of history (k, every defect_window_days()) and live production file: static values (tokens, decisions, max_decisions, max_nesting, max_params, throws, unhandled, invariants, global_state), changes in the window before the cut, hotspot (changes * decisions), random (0: ranks files in a fixed pseudo-random order), and fixes: fix commits (commit_info.is_fix) touching the file in the window after.';
+
+-- Orphaning per file at every weekly window point (`windows`): the share of the
+-- file's past changes (non-bulk commits, renames followed) made by authors with no
+-- commit in the orphan_months() before that point.
+create or replace view units.orphaning as
+with points as (
+  select distinct w.win as seq, c.time from windows w join commit_times c on c.seq = w.win),
+active as (
+  select distinct p.seq, a.identity
+  from points p join commit_times t on t.seq <= p.seq and t.time > p.time - to_months(orphan_months())
+  join authors a on a.seq = t.seq),
+history as (
+  select p.seq, x.lineage, a.identity
+  from points p join code_changes x on x.seq <= p.seq join authors a on a.seq = x.seq
+  where x.blob is not null and x.seq in (select seq from change_weights)),
+per_file as (
+  select h.seq, h.lineage, count(*) as changes, avg((ac.identity is null)::int) as orphaned
+  from history h left join active ac using (seq, identity) group by all)
+select p.seq, f.path, f.lineage, f.tokens, coalesce(o.changes, 0) as changes, coalesce(o.orphaned, 0) as orphaned
+from points p join units.files f on f.since <= p.seq and p.seq < f.until
+left join per_file o on o.seq = p.seq and o.lineage = f.lineage;
+
+comment on view units.orphaning is 'Per weekly window point (seq) and live production file: changes (non-bulk, renames followed, up to then) and orphaned, the share of them by authors with no commit in the orphan_months() before. Unvalidated.';

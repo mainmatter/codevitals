@@ -775,3 +775,35 @@ fn hotspots_rank_change_times_complexity() {
         "files without recent changes are left out: {text}"
     );
 }
+
+/// Orphaning: code mostly changed by authors who stopped committing.
+#[test]
+fn orphaning_counts_departed_authors() {
+    let f = |n: u32| format!("fn f(x: i32) -> i32 {{ x + {n} }}\n");
+    let mut r = common::Repo::new();
+    r.author("Old", "old@x")
+        .write("a.rs", f(0))
+        .write("b.rs", f(0));
+    r.commit("main", "c0\n", 0, &[]);
+    r.write("a.rs", f(1));
+    r.extend("c1\n", 1);
+    r.author("New", "new@x");
+    for day in 400..403 {
+        r.write("b.rs", f(day));
+        r.extend("edit b\n", day as i64);
+    }
+    scan(&r.dir, "main");
+    execute(&r.dir, "create or replace macro window_commits() as 3");
+    // At the last point only New committed in the past year: a.rs has all its changes
+    // by Old (orphaned), b.rs one of four.
+    assert_rows(
+        &r.dir,
+        "select path, changes, orphaned from units.orphaning where seq = 4 order by path",
+        "(a.rs,2,1.0) (b.rs,4,0.25)",
+    );
+    assert_rows(
+        &r.dir,
+        "select seq, value, orphaned_files, files from metrics.orphaning order by seq",
+        "(4,0.5,1,2)",
+    );
+}

@@ -74,13 +74,6 @@ Read: 0.2 means a fifth of a typical commit''s edits rework last week''s code. E
 
 Trend: rising means code does not settle. A faster commit pace raises it too (see span_weeks). Unvalidated.';
 
--- Each non-bulk code commit weighs 1, split over its files (lineages: a renamed file
--- stays one file).
-create or replace view change_weights as
-select seq, path, lineage, 1 / count(*) over (partition by seq) as w, count(*) over (partition by seq) as k
-from code_changes
-qualify count(*) over (partition by seq) <= max_commit_files();
-
 create or replace view metrics.change_entropy as
 with f as (select w.win, c.lineage, any_value(c.path) as path, sum(c.w) as w
            from windows w join change_weights c using (seq) group by w.win, c.lineage),
@@ -198,6 +191,22 @@ What: for files changed at least twice in the last 100 code commits, the share o
 Read: 0.8 means a typical file''s main author made 80% of its changes. The shaded band is a 95% confidence interval for this average: movement inside it is noise.
 
 Trend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.';
+
+create or replace view metrics.orphaning as
+select o.seq, coalesce(sum(tokens) filter (orphaned > orphaned_share()), 0) / nullif(sum(tokens), 0) as value,
+       sum(orphaned * tokens) / nullif(sum(tokens), 0) as mean_orphaned,
+       count(*) filter (orphaned > orphaned_share()) as orphaned_files, count(*) as files,
+       any_value(w.span_weeks) as span_weeks
+from units.orphaning o join (select win, any_value(span_weeks) as span_weeks from windows group by win) w on w.win = o.seq
+group by o.seq;
+
+comment on view metrics.orphaning is 'CHANGES: Code whose authors have left
+
+What: the share of production code in files where more than half of the past changes were made by authors with no commit in the last 12 months, each week. mean_orphaned is the token-weighted share of changes by such authors; orphaned_files counts the files. Lower is better.
+
+Read: 0.3 means three tenths of the code was mostly written by people no longer committing. Bulk commits are left out; renames keep a file''s history. Squash merges credit the merger.
+
+Trend: rising means knowledge of more code leaves with its authors: that code is changed by people who did not write it. Separate from ownership, which looks at who changes files now. Unvalidated.';
 
 create or replace view metrics.function_decisions as
 select seq, p90 as value, max, share, functions from function_tail('decisions', many_decisions());
