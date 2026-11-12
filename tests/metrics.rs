@@ -287,8 +287,8 @@ fn inert_commits_leave_past_windows_unchanged() {
     execute(
         &dir,
         "insert into commits values
-           (300, 'bulk', timestamp '2026-01-01' + to_days(320), 't <t@t>', 'bulk'),
-           (301, 'lone', timestamp '2026-01-01' + to_days(321), 't <t@t>', 'lone');
+           (300, 'bulk', timestamp '2026-01-01' + to_days(320), 't', 't@t', 'bulk'),
+           (301, 'lone', timestamp '2026-01-01' + to_days(321), 't', 't@t', 'lone');
          insert into changes (seq, path, blob) select 300, 'bulk/b' || i || '.rs', 'bulk' || i from range(40) r(i);
          insert into changes (seq, path, blob) values (301, 'lone/x.rs', 'lone');
          insert into spans (blob, v, lang, kind, line, tokens)
@@ -435,7 +435,7 @@ fn change_points_match_per_commit_sums() {
 /// hubs.
 fn random_imports(modules: u32, files: u32, targets: u32, per_file: u32) -> String {
     format!(
-        "insert into commits values (0, 'c0', timestamp '2026-01-01', 't <t@t>', 'init');
+        "insert into commits values (0, 'c0', timestamp '2026-01-01', 't', 't@t', 'init');
          insert into changes (seq, path, blob) select 0, 'm' || (f % {modules}) || '/f' || f || '.py', 'b' || f from range({files}) g(f);
          insert into spans (blob, v, lang, kind, line, tokens) select 'b' || f, 1, 'python', 'file', 1, 1 from range({files}) g(f);
          insert into spans (blob, v, lang, kind, name, line, start_byte, end_byte)
@@ -597,9 +597,9 @@ fn sql_covers_every_language() {
 fn commit_times_drop_a_lone_wrong_clock() {
     let dir = facts(
         "insert into commits values
-           (0, 'a', timestamp '2026-01-01', 't', 'x'), (1, 'b', timestamp '1970-01-01', 't', 'x'),
-           (2, 'c', timestamp '2026-01-03', 't', 'x'), (3, 'd', timestamp '2999-01-01', 't', 'x'),
-           (4, 'e', timestamp '2026-01-05', 't', 'x'), (5, 'f', timestamp '2026-01-04', 't', 'x')",
+           (0, 'a', timestamp '2026-01-01', 't', 't@t', 'x'), (1, 'b', timestamp '1970-01-01', 't', 't@t', 'x'),
+           (2, 'c', timestamp '2026-01-03', 't', 't@t', 'x'), (3, 'd', timestamp '2999-01-01', 't', 't@t', 'x'),
+           (4, 'e', timestamp '2026-01-05', 't', 't@t', 'x'), (5, 'f', timestamp '2026-01-04', 't', 't@t', 'x')",
     );
     assert_rows(
         &dir,

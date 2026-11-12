@@ -98,16 +98,17 @@ pub fn walk(
             let diffing = Instant::now();
             let commit = find(id)?;
             let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
-            let (time, author, message) = (|| -> Result<_> {
+            let (time, name, email, message) = (|| -> Result<_> {
                 let author = commit.author()?;
                 Ok((
                     Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
-                    format!("{} <{}>", author.name, author.email),
+                    author.name.to_string(),
+                    author.email.to_string(),
                     commit.message_raw()?.to_string(),
                 ))
             })()
             .with_context(|| format!("read commit {id}"))?;
-            commits.append_row(params![seq, id.to_string(), time, author, message])?;
+            commits.append_row(params![seq, id.to_string(), time, name, email, message])?;
             for (path, (blob, _)) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
                 attributes.set(path, blob.as_deref().map(read).transpose()?);
             }
@@ -133,8 +134,38 @@ pub fn walk(
         tx.commit()?;
         info!("walk: {}/{} commits", seq - stored, chain.len());
     }
-    info!(commits = chain.len(), changes, elapsed = ?started.elapsed(), "walk done");
+    let entries = mailmap(db, repo, head)?;
+    info!(commits = chain.len(), changes, mailmap = entries, elapsed = ?started.elapsed(), "walk done");
     Ok((chain.len(), changes))
+}
+
+/// Replaces `mailmap` with the entries of `.mailmap` at the scanned revision (none
+/// when it has none). Lines that do not parse are skipped, as git skips them.
+fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Result<usize> {
+    let tree = repo.find_commit(head)?.tree()?;
+    let content = match tree.lookup_entry_by_path(".mailmap")? {
+        Some(entry) if entry.mode().is_blob() => entry.object()?.detach().data,
+        _ => Vec::new(),
+    };
+    let text = |s: Option<&gix::bstr::BStr>| s.map(|s| s.to_string());
+    let tx = db.transaction()?;
+    tx.execute("delete from mailmap", [])?;
+    let mut rows = tx.appender("mailmap")?;
+    let mut count = 0;
+    for (line, entry) in gix::mailmap::parse_ignore_errors(&content).enumerate() {
+        rows.append_row(params![
+            line,
+            text(entry.new_name()),
+            text(entry.new_email()),
+            text(entry.old_name()),
+            entry.old_email().to_string()
+        ])?;
+        count += 1;
+    }
+    rows.flush()?;
+    drop(rows);
+    tx.commit()?;
+    Ok(count)
 }
 
 /// A commit's change to one path: its new blob (`None` when the file is gone), and

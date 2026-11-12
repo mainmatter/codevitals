@@ -3,8 +3,13 @@ create table if not exists codevitals (schema integer, extractor integer);
 -- The metric views (metrics.sql).
 create schema if not exists metrics;
 
+-- author_name, author_email: as the commit records them; `authors` applies .mailmap.
 create table if not exists commits (
-  seq integer, id text, time timestamp, author text, message text);
+  seq integer, id text, time timestamp, author_name text, author_email text, message text);
+-- The .mailmap of the newest scanned revision, one row per entry in file order
+-- (walk.rs): commits whose email (and name, when given) match get the proper ones.
+create table if not exists mailmap (
+  line integer, proper_name text, proper_email text, commit_name text, commit_email text);
 -- attr: the role .gitattributes give the path at that commit; test_features: the
 -- cargo features they declare test-only there, joined by `,` (attributes.rs).
 -- source: the path the file was renamed from (walk.rs), which has a row of its own

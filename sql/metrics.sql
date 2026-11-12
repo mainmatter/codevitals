@@ -179,8 +179,8 @@ Trend: rising means logic piles up in a few large functions. Unvalidated.';
 
 create or replace view metrics.ownership as
 with changes_by_author as (
-  select w.win, x.lineage, c.author, count(*) as n
-  from windows w join change_weights x using (seq) join commits c using (seq)
+  select w.win, x.lineage, a.identity, count(*) as n
+  from windows w join change_weights x using (seq) join authors a using (seq)
   group by all),
 files as (
   select win, lineage, max(n) / sum(n) as top_share

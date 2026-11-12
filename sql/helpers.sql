@@ -146,6 +146,27 @@ create or replace view versions as
   select path, blob, test_features, since, least(until, (select max(seq) + 1 from commits)) as until
   from files;
 
+-- Each commit's author after .mailmap, as git applies it: an entry naming the commit's
+-- name and email wins over one naming its email alone (both case-insensitive); later
+-- entries win over earlier ones. `identity` is the lowercased email, which tells
+-- authors apart.
+create or replace view authors as
+with entries as (
+  select lower(commit_email) as commit_email, lower(commit_name) as commit_name,
+         arg_max(proper_name, line) filter (proper_name is not null) as proper_name,
+         arg_max(proper_email, line) filter (proper_email is not null) as proper_email
+  from mailmap group by all),
+resolved as (
+  select c.seq, c.author_name, c.author_email,
+         coalesce(n.proper_name, if(n.commit_email is null, e.proper_name, null), c.author_name) as name,
+         coalesce(n.proper_email, if(n.commit_email is null, e.proper_email, null), c.author_email) as email
+  from commits c
+  left join entries n on n.commit_email = lower(c.author_email) and n.commit_name = lower(c.author_name)
+  left join entries e on e.commit_email = lower(c.author_email) and e.commit_name is null)
+select seq, name, email, lower(email) as identity,
+       regexp_matches(name || ' ' || email, '(?i)\[bot\]') as is_bot
+from resolved;
+
 -- Commit times for windows and ages: each the median of itself and its neighbours
 -- (a lone wrong clock does not count), never earlier than the one before.
 create or replace view commit_times as

@@ -35,7 +35,7 @@ fn fixture_tables() {
     let commits: Vec<String> = (0..4)
         .map(|i| {
             let message = ["c0", "c1", "c2", "merge"][i];
-            format!("({i},{},{} 00:00:00,t <t@t>,{message}\n)", ids[i], times[i])
+            format!("({i},{},{} 00:00:00,t,t@t,{message}\n)", ids[i], times[i])
         })
         .collect();
     assert_eq!(
@@ -84,6 +84,44 @@ fn fixture_tables() {
                  where kind = 'fn' and blob in ('{a1}', '{a2}') order by comments"
         ),
         format!("({a1},add,18,0) ({a2},add,18,2)"),
+    );
+}
+
+/// Authors are told apart after the scanned revision's .mailmap, as git applies it,
+/// including to commits stored by an earlier scan.
+#[test]
+fn mailmap_merges_authors() {
+    let mut r = common::Repo::new();
+    r.write("a.rs", "fn a() {}\n");
+    r.author("Ann", "ann@old.org")
+        .commit("main", "c0\n", 0, &[]);
+    r.write("a.rs", "fn a() { }\n");
+    r.author("ann", "ANN@work.com").extend("c1\n", 1);
+    r.write("a.rs", "fn a() {  }\n");
+    r.author("build", "ci@x.org").extend("c2\n", 2);
+    r.write("a.rs", "fn a() {   }\n");
+    r.author("dependabot[bot]", "bot@x.org").extend("c3\n", 3);
+    scan(&r.dir, "main");
+    let authors = "select seq, name, email, identity, is_bot from authors order by seq";
+    assert_rows(
+        &r.dir,
+        authors,
+        "(0,Ann,ann@old.org,ann@old.org,false) (1,ann,ANN@work.com,ann@work.com,false) \
+         (2,build,ci@x.org,ci@x.org,false) (3,dependabot[bot],bot@x.org,bot@x.org,true)",
+    );
+    r.write(
+        ".mailmap",
+        "# comment\nAnn Smith <ann@work.com> <ann@old.org>\n<ann@work.com> <Ann@Work.com>\n\
+         Ann Smith <ann@work.com> ann <ann@work.com>\nRobot <ci@x.org> Someone Else <ci@x.org>\n",
+    );
+    r.author("Ann", "ann@old.org").extend("mailmap\n", 4);
+    scan(&r.dir, "main");
+    assert_rows(
+        &r.dir,
+        authors,
+        "(0,Ann Smith,ann@work.com,ann@work.com,false) (1,Ann Smith,ann@work.com,ann@work.com,false) \
+         (2,build,ci@x.org,ci@x.org,false) (3,dependabot[bot],bot@x.org,bot@x.org,true) \
+         (4,Ann Smith,ann@work.com,ann@work.com,false)",
     );
 }
 
