@@ -14,13 +14,26 @@ fn main() {
              from (select unnest(functions) as f from read_json('{units}', maximum_object_size=100000000))"
         ))
         .unwrap();
-    let rows: Vec<(String, String, i64, i64, i64, i64, i64, String)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)))
+    type Row = (String, String, i64, i64, i64, i64, i64, String);
+    let rows: Vec<Row> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+            ))
+        })
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
     println!("function,cc,decisions,nesting,tokens");
-    let mut cache: std::collections::HashMap<String, (Vec<u8>, tree_sitter::Tree)> = Default::default();
+    let mut cache: std::collections::HashMap<String, (Vec<u8>, tree_sitter::Tree)> =
+        Default::default();
     for (path, lang, start, end, decisions, nesting, tokens, function) in rows {
         let (src, tree) = cache.entry(path.clone()).or_insert_with(|| {
             let src = std::fs::read(format!("{repo}/{path}")).unwrap();
@@ -58,12 +71,19 @@ fn cognitive(f: Node, lang: &str, src: &[u8]) -> u32 {
 fn is_logical(n: Node, lang: &str, src: &[u8]) -> Option<String> {
     match (lang, n.kind()) {
         ("rust", "binary_expression") => {
-            let op = n.child_by_field_name("operator")?.utf8_text(src).ok()?.to_owned();
+            let op = n
+                .child_by_field_name("operator")?
+                .utf8_text(src)
+                .ok()?
+                .to_owned();
             (op == "&&" || op == "||").then_some(op)
         }
-        ("python", "boolean_operator") => {
-            Some(n.child_by_field_name("operator")?.utf8_text(src).ok()?.to_owned())
-        }
+        ("python", "boolean_operator") => Some(
+            n.child_by_field_name("operator")?
+                .utf8_text(src)
+                .ok()?
+                .to_owned(),
+        ),
         _ => None,
     }
 }
@@ -78,7 +98,7 @@ fn walk(n: Node, level: u32, lang: &str, src: &[u8], total: &mut u32) {
             let else_if = n.parent().is_some_and(|p| p.kind() == "else_clause");
             *total += if else_if { 1 } else { 1 + level };
             // Condition at this level; consequence one deeper; else handled below.
-            let lvl = if else_if { level } else { level };
+            let lvl = level;
             for c in children(n) {
                 match c.kind() {
                     "else_clause" => {
@@ -101,7 +121,10 @@ fn walk(n: Node, level: u32, lang: &str, src: &[u8], total: &mut u32) {
             }
             return;
         }
-        ("rust", "match_expression" | "for_expression" | "while_expression" | "loop_expression") => (true, true),
+        (
+            "rust",
+            "match_expression" | "for_expression" | "while_expression" | "loop_expression",
+        ) => (true, true),
         ("rust", "closure_expression" | "function_item") => (false, true),
         ("rust", "break_expression" | "continue_expression") => {
             if children(n).iter().any(|c| c.kind() == "label") {
@@ -132,7 +155,14 @@ fn walk(n: Node, level: u32, lang: &str, src: &[u8], total: &mut u32) {
             }
             return;
         }
-        ("python", "for_statement" | "while_statement" | "except_clause" | "conditional_expression" | "match_statement") => (true, true),
+        (
+            "python",
+            "for_statement"
+            | "while_statement"
+            | "except_clause"
+            | "conditional_expression"
+            | "match_statement",
+        ) => (true, true),
         ("python", "else_clause") => {
             // else of for/while/try: +1
             *total += 1;
@@ -146,7 +176,10 @@ fn walk(n: Node, level: u32, lang: &str, src: &[u8], total: &mut u32) {
     }
     if let Some(op) = is_logical(n, lang, src) {
         // A new sequence of like operators: the parent is not the same operator.
-        let same_parent = n.parent().and_then(|p| is_logical(p, lang, src)).is_some_and(|p| p == op);
+        let same_parent = n
+            .parent()
+            .and_then(|p| is_logical(p, lang, src))
+            .is_some_and(|p| p == op);
         if !same_parent {
             *total += 1;
         }

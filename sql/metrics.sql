@@ -199,37 +199,6 @@ Read: 0.8 means a typical file''s main author made 80% of its changes. The shade
 
 Trend: falling means more people change code nobody owns, which went with more defects (Bird et al.). Squash merges credit the merger.';
 
-create or replace view metrics.decisions as
-select seq, 100 * sum(decisions) / nullif(sum(tokens), 0) as value,
-       map(list(lang order by lang), list(100 * decisions / nullif(tokens, 0) order by lang)) as by_language,
-       100 * family_ratio(decisions, tokens, lang, 'c') as c, 100 * family_ratio(decisions, tokens, lang, 'rust') as rust,
-       100 * family_ratio(decisions, tokens, lang, 'python') as python, 100 * family_ratio(decisions, tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
-
-comment on view metrics.decisions is 'COMPLEXITY: Decision points per 100 tokens
-
-What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).
-
-Read: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.
-
-Trend: rising means more paths to understand and test per line. Unvalidated.';
-
-create or replace view metrics.nesting as
-select seq, sum(nested_tokens) / nullif(sum(fn_tokens), 0) as value,
-       sum(deep_tokens) / nullif(sum(fn_tokens), 0) as deep_share,
-       map(list(lang order by lang), list(nested_tokens / nullif(fn_tokens, 0) order by lang)) as by_language,
-       family_ratio(nested_tokens, fn_tokens, lang, 'c') as c, family_ratio(nested_tokens, fn_tokens, lang, 'rust') as rust,
-       family_ratio(nested_tokens, fn_tokens, lang, 'python') as python, family_ratio(nested_tokens, fn_tokens, lang, 'ecma') as ecma
-from code_totals group by seq;
-
-comment on view metrics.nesting is 'COMPLEXITY: Block nesting below function body
-
-What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.
-
-Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.
-
-Trend: rising means more conditions to keep in mind while reading. Unvalidated.';
-
 create or replace view metrics.function_decisions as
 select seq, p90 as value, max, share, functions from function_tail('decisions', many_decisions());
 
@@ -263,8 +232,39 @@ Read: 4 means nine in ten functions take at most 4 parameters.
 
 Trend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.';
 
+create or replace view metrics.decisions as
+select seq, 100 * sum(decisions) / nullif(sum(tokens), 0) as value,
+       map(list(lang order by lang), list(100 * decisions / nullif(tokens, 0) order by lang)) as by_language,
+       100 * family_ratio(decisions, tokens, lang, 'c') as c, 100 * family_ratio(decisions, tokens, lang, 'rust') as rust,
+       100 * family_ratio(decisions, tokens, lang, 'python') as python, 100 * family_ratio(decisions, tokens, lang, 'ecma') as ecma
+from code_totals group by seq;
+
+comment on view metrics.decisions is 'COMPLEXITY: Decision points per 100 tokens
+
+What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).
+
+Read: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.
+
+Trend: rising means more paths to understand and test per line. A density: adding plain code anywhere lowers it, and dividing by size does not remove size, so read function_decisions first. Unvalidated.';
+
+create or replace view metrics.nesting as
+select seq, sum(nested_tokens) / nullif(sum(fn_tokens), 0) as value,
+       sum(deep_tokens) / nullif(sum(fn_tokens), 0) as deep_share,
+       map(list(lang order by lang), list(nested_tokens / nullif(fn_tokens, 0) order by lang)) as by_language,
+       family_ratio(nested_tokens, fn_tokens, lang, 'c') as c, family_ratio(nested_tokens, fn_tokens, lang, 'rust') as rust,
+       family_ratio(nested_tokens, fn_tokens, lang, 'python') as python, family_ratio(nested_tokens, fn_tokens, lang, 'ecma') as ecma
+from code_totals group by seq;
+
+comment on view metrics.nesting is 'COMPLEXITY: Block nesting below function body
+
+What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.
+
+Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.
+
+Trend: rising means more conditions to keep in mind while reading. An average over all function code: read function_nesting first. Unvalidated.';
+
 create or replace view metrics.global_state as
-select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value,
+select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value, sum(global_state) as count,
        map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language,
        1000 * family_ratio(global_state, tokens, lang, 'c') as c, 1000 * family_ratio(global_state, tokens, lang, 'rust') as rust,
        1000 * family_ratio(global_state, tokens, lang, 'python') as python, 1000 * family_ratio(global_state, tokens, lang, 'ecma') as ecma
@@ -272,14 +272,14 @@ from code_totals group by seq;
 
 comment on view metrics.global_state is 'NONLOCAL: Global mutable state per 1,000 tokens
 
-What: declarations of global mutable state per 1,000 production tokens, overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
+What: declarations of global mutable state per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.
 
 Read: the forms differ: compare each language over time, not languages with each other.
 
-Trend: rising means behaviour depends on more state outside the code in view.';
+Trend: rising means behaviour depends on more state outside the code in view. Read the count beside the density: adding plain code lowers the density without removing any state.';
 
 create or replace view metrics.exceptions as
-select seq, 1000 * sum(throws) / nullif(sum(tokens), 0) as value,
+select seq, 1000 * sum(throws) / nullif(sum(tokens), 0) as value, sum(throws) as count,
        map(list(lang order by lang), list(1000 * throws / nullif(tokens, 0) order by lang)) as by_language,
        1000 * family_ratio(throws, tokens, lang, 'c') as c, 1000 * family_ratio(throws, tokens, lang, 'rust') as rust,
        1000 * family_ratio(throws, tokens, lang, 'python') as python, 1000 * family_ratio(throws, tokens, lang, 'ecma') as ecma
@@ -287,11 +287,11 @@ from code_totals group by seq;
 
 comment on view metrics.exceptions is 'NONLOCAL: Throws and panics per 1,000 tokens
 
-What: non-local exits per 1,000 production tokens, overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp.
+What: non-local exits per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp. invariants, unhandled and unfinished split them by intent.
 
 Read: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.
 
-Trend: rising means control leaves functions in more places a caller cannot see. Unvalidated.';
+Trend: rising means control leaves functions in more places a caller cannot see. Read the count beside the density. Unvalidated.';
 
 create or replace view metrics.invariants as
 select seq, 1000 * sum(invariants) / nullif(sum(tokens), 0) as value, sum(invariants) as count,

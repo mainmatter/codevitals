@@ -1871,8 +1871,8 @@
     {
       "id": 23,
       "type": "timeseries",
-      "title": "Decision points per 100 tokens",
-      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.\n\nTrend: rising means more paths to understand and test per line. Unvalidated.",
+      "title": "Decision points per function (90th percentile)",
+      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per production function: the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 10 (share).\n\nRead: 6 means nine in ten functions have at most 6 decision points. A tail value, so adding simple code elsewhere does not lower it.\n\nTrend: rising means the branchiest functions get branchier. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -1882,6 +1882,354 @@
         "w": 8,
         "x": 0,
         "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.function_decisions",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Decision points per function (90th percentile)",
+              "type": "number"
+            },
+            {
+              "selector": "max",
+              "text": "max",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Decision points per function (90th percentile)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Nesting depth per function (90th percentile)",
+      "description": "What: the deepest block below the function body, per production function: the 90th percentile over functions (value), the deepest function (max), and the share of function code in functions nested more than 3 deep (share).\n\nRead: 2 means nine in ten functions nest at most two blocks below their body. Else-if chains stay flat.\n\nTrend: rising means the most deeply nested functions get deeper. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.function_nesting",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Nesting depth per function (90th percentile)",
+              "type": "number"
+            },
+            {
+              "selector": "max",
+              "text": "max",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Nesting depth per function (90th percentile)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Parameters per function (90th percentile)",
+      "description": "What: parameters per production function (self included): the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 5 (share).\n\nRead: 4 means nine in ten functions take at most 4 parameters.\n\nTrend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${datasource}"
+          },
+          "type": "json",
+          "source": "url",
+          "url": "${metrics_url}",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "parser": "backend",
+          "root_selector": "$.function_params",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "time",
+              "text": "time",
+              "type": "timestamp"
+            },
+            {
+              "selector": "value",
+              "text": "Parameters per function (90th percentile)",
+              "type": "number"
+            },
+            {
+              "selector": "max",
+              "text": "max",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Parameters per function (90th percentile)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Decision points per 100 tokens",
+      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per 100 production tokens, overall and per language (c, rust, python, ecma).\n\nRead: 5 means one decision every 20 tokens. Languages differ: compare each language over time, not languages with each other.\n\nTrend: rising means more paths to understand and test per line. A density: adding plain code anywhere lowers it, and dividing by size does not remove size, so read function_decisions first. Unvalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 84
       },
       "targets": [
         {
@@ -2041,10 +2389,10 @@
       }
     },
     {
-      "id": 24,
+      "id": 27,
       "type": "timeseries",
       "title": "Block nesting below function body",
-      "description": "What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. Unvalidated.",
+      "description": "What: how many blocks deep function code sits below the function body, weighted by tokens, overall and per language (c, rust, python, ecma); deep_share is the code in functions nested more than 3 deep.\n\nRead: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat.\n\nTrend: rising means more conditions to keep in mind while reading. An average over all function code: read function_nesting first. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -2053,7 +2401,7 @@
         "h": 9,
         "w": 8,
         "x": 8,
-        "y": 75
+        "y": 84
       },
       "targets": [
         {
@@ -2213,354 +2561,6 @@
       }
     },
     {
-      "id": 25,
-      "type": "timeseries",
-      "title": "Decision points per function (90th percentile)",
-      "description": "What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per production function: the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 10 (share).\n\nRead: 6 means nine in ten functions have at most 6 decision points. A tail value, so adding simple code elsewhere does not lower it.\n\nTrend: rising means the branchiest functions get branchier. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 16,
-        "y": 75
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.function_decisions",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Decision points per function (90th percentile)",
-              "type": "number"
-            },
-            {
-              "selector": "max",
-              "text": "max",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Decision points per function (90th percentile)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "text"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "max"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 26,
-      "type": "timeseries",
-      "title": "Nesting depth per function (90th percentile)",
-      "description": "What: the deepest block below the function body, per production function: the 90th percentile over functions (value), the deepest function (max), and the share of function code in functions nested more than 3 deep (share).\n\nRead: 2 means nine in ten functions nest at most two blocks below their body. Else-if chains stay flat.\n\nTrend: rising means the most deeply nested functions get deeper. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 0,
-        "y": 84
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.function_nesting",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Nesting depth per function (90th percentile)",
-              "type": "number"
-            },
-            {
-              "selector": "max",
-              "text": "max",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Nesting depth per function (90th percentile)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "text"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "max"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "id": 27,
-      "type": "timeseries",
-      "title": "Parameters per function (90th percentile)",
-      "description": "What: parameters per production function (self included): the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 5 (share).\n\nRead: 4 means nine in ten functions take at most 4 parameters.\n\nTrend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 8,
-        "x": 8,
-        "y": 84
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "${datasource}"
-          },
-          "type": "json",
-          "source": "url",
-          "url": "${metrics_url}",
-          "url_options": {
-            "method": "GET",
-            "data": ""
-          },
-          "parser": "backend",
-          "root_selector": "$.function_params",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "time",
-              "text": "time",
-              "type": "timestamp"
-            },
-            {
-              "selector": "value",
-              "text": "Parameters per function (90th percentile)",
-              "type": "number"
-            },
-            {
-              "selector": "max",
-              "text": "max",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "spanNulls": false,
-            "showPoints": "never",
-            "fillOpacity": 0
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Parameters per function (90th percentile)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "text"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "max"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
       "id": 28,
       "type": "row",
       "title": "Non-local control flow and state",
@@ -2577,7 +2577,7 @@
       "id": 29,
       "type": "timeseries",
       "title": "Global mutable state per 1,000 tokens",
-      "description": "What: declarations of global mutable state per 1,000 production tokens, overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare each language over time, not languages with each other.\n\nTrend: rising means behaviour depends on more state outside the code in view.",
+      "description": "What: declarations of global mutable state per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): Rust static mut, C/C++ file-scope variables, Python global, JS/TS module-level let and var.\n\nRead: the forms differ: compare each language over time, not languages with each other.\n\nTrend: rising means behaviour depends on more state outside the code in view. Read the count beside the density: adding plain code lowers the density without removing any state.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -2635,6 +2635,11 @@
               "selector": "ecma",
               "text": "JS/TS",
               "type": "number"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
             }
           ]
         }
@@ -2730,6 +2735,29 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
           }
         ]
       },
@@ -2749,7 +2777,7 @@
       "id": 30,
       "type": "timeseries",
       "title": "Throws and panics per 1,000 tokens",
-      "description": "What: non-local exits per 1,000 production tokens, overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Unvalidated.",
+      "description": "What: non-local exits per 1,000 production tokens (value), their number (count), overall and per language (c, rust, python, ecma): throw, raise, Rust panics, unwrap and expect, C longjmp. invariants, unhandled and unfinished split them by intent.\n\nRead: in Rust mostly unwrap and expect; elsewhere throws a distant caller must handle. Compare each language over time.\n\nTrend: rising means control leaves functions in more places a caller cannot see. Read the count beside the density. Unvalidated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "${datasource}"
@@ -2807,6 +2835,11 @@
               "selector": "ecma",
               "text": "JS/TS",
               "type": "number"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
             }
           ]
         }
@@ -2900,6 +2933,29 @@
                   "mode": "fixed",
                   "fixedColor": "#c98500"
                 }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           }
@@ -2979,6 +3035,11 @@
               "selector": "ecma",
               "text": "JS/TS",
               "type": "number"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
             }
           ]
         }
@@ -3072,6 +3133,29 @@
                   "mode": "fixed",
                   "fixedColor": "#c98500"
                 }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           }
@@ -3151,6 +3235,11 @@
               "selector": "ecma",
               "text": "JS/TS",
               "type": "number"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
             }
           ]
         }
@@ -3244,6 +3333,29 @@
                   "mode": "fixed",
                   "fixedColor": "#c98500"
                 }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           }
@@ -3323,6 +3435,11 @@
               "selector": "ecma",
               "text": "JS/TS",
               "type": "number"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
             }
           ]
         }
@@ -3416,6 +3533,29 @@
                   "mode": "fixed",
                   "fixedColor": "#c98500"
                 }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           }
