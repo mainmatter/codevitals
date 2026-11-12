@@ -171,7 +171,7 @@ fn main() -> Result<()> {
             names,
         } => {
             let mut db = open_scanned(&path)?;
-            let metrics = metrics::list(&db)?;
+            let metrics = metrics::list(&db, "metrics")?;
             ensure!(
                 !metrics.iter().any(|m| output.as_os_str() == m.as_str()),
                 "{output:?} is a metric; give the output file first, e.g. `cv metrics - {}`",
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
                         .collect()
                 }
             };
-            let json = metrics::export(&mut db, &names)?;
+            let json = metrics::export(&mut db, "metrics", &names)?;
             write(&output, json)?;
             info!(?output, "metrics written");
         }
@@ -200,7 +200,7 @@ fn main() -> Result<()> {
             names,
         } => {
             let mut db = open_scanned(&path)?;
-            let all = metrics::list_in(&db, "experimental")?;
+            let all = metrics::list(&db, "experimental")?;
             if let Some(unknown) = names.iter().find(|n| !all.contains(n)) {
                 anyhow::bail!(
                     "{unknown:?} is no experimental metric; they are: {}",
@@ -208,7 +208,7 @@ fn main() -> Result<()> {
                 );
             }
             let names = if names.is_empty() { all } else { names };
-            let json = metrics::export_in(&mut db, "experimental", &names)?;
+            let json = metrics::export(&mut db, "experimental", &names)?;
             write(&output, json)?;
         }
         Cli::Diff {

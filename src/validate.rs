@@ -108,31 +108,27 @@ type CutFile = (u64, f64, i64, Vec<f64>);
 fn defects(db: &Connection) -> Result<Defects> {
     let window_days: i64 = db.query_row("select defect_window_days()", [], |r| r.get(0))?;
     let query = format!(
-        "select k, lineage, tokens, fixes, {} from units.defect_windows order by k",
+        "select k, lineage, tokens, fixes, {} from units.defect_windows",
         RANKINGS.join(", ")
     );
-    // Per cut: (lineage, tokens, fixes, values per ranking).
-    let mut cuts: Vec<Vec<CutFile>> = Vec::new();
-    let mut last = None;
+    // Per cut, in order (grouped here: see `db::open` on ORDER BY): (lineage, tokens,
+    // fixes, values per ranking).
+    let mut by_cut = std::collections::BTreeMap::<i64, Vec<CutFile>>::new();
     let mut stmt = db.prepare(&query)?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        let k: i64 = r.get(0)?;
-        if last != Some(k) {
-            cuts.push(Vec::new());
-            last = Some(k);
-        }
         let lineage: String = r.get(1)?;
         let values = (0..RANKINGS.len())
             .map(|i| r.get::<_, Option<f64>>(4 + i).map(|v| v.unwrap_or(0.0)))
             .collect::<duckdb::Result<_>>()?;
-        cuts.last_mut().expect("pushed").push((
+        by_cut.entry(r.get(0)?).or_default().push((
             xxh3_64(lineage.as_bytes()),
             r.get(2)?,
             r.get(3)?,
             values,
         ));
     }
+    let cuts: Vec<Vec<CutFile>> = by_cut.into_values().collect();
     let fixes: i64 = cuts.iter().flatten().map(|f| f.2).sum();
     let found = (0..RANKINGS.len())
         .map(|i| {

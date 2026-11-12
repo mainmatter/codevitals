@@ -17,15 +17,14 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
-use duckdb::types::{TimeUnit, Value};
+use anyhow::{Context, Result};
 use duckdb::{Connection, params};
 use tracing::info;
 
 use crate::attributes::Attributes;
 use crate::thrash::Thrash;
 use crate::util::{Format, json_number, json_text};
-use crate::walk::{Row, commit, diff_trees, path_text};
+use crate::walk::{Row, append_change, commit, commit_row, diff_trees, path_text};
 
 /// The experimental edit thrash of the range: lines added and deleted again by its
 /// first-parent commits; `null` when BASE is not on HEAD's first-parent chain.
@@ -42,8 +41,8 @@ fn thrash_json(t: Option<&Thrash>) -> String {
     }
 }
 
-/// Metrics that `cv validate` supports (item 15 of the plan decides). Every other
-/// metric's values are marked unvalidated.
+/// Metrics whose values `cv validate` has shown to agree with judgments and defects;
+/// none yet. Every other metric's values are marked unvalidated.
 pub const VALIDATED: &[&str] = &[];
 
 /// How each snapshot metric decomposes over units: (metric, scale, numerator,
@@ -136,17 +135,19 @@ pub fn diff(
     let reused = reuse_spans(&db, scanned)?;
     let parsed = crate::parse::parse(&mut db, repo)?;
     info!(reused, parsed, "blobs");
-    // Materializes the helper views once for every metric, deriving the cones too.
-    let mut roots: Vec<String> = crate::metrics::list(&db)?
-        .iter()
-        .map(|m| format!("metrics.{m}"))
+    // The metrics a two-commit history gives, and the helper views they read,
+    // materialized once.
+    let metrics: Vec<String> = crate::metrics::list(&db, "metrics")?
+        .into_iter()
+        .filter(|m| !HISTORY.contains(&m.as_str()))
         .collect();
+    let mut roots: Vec<String> = metrics.iter().map(|m| format!("metrics.{m}")).collect();
     roots.extend(["units.files".into(), "units.functions".into()]);
     crate::metrics::cache_helpers(&mut db, &roots)?;
 
     let mut changes = Vec::new();
     db.execute_batch(UNIT_ROWS)?;
-    for metric in crate::metrics::list(&db)? {
+    for metric in metrics {
         let values: Vec<(i32, Option<f64>)> = db
             .prepare(&format!(
                 "select seq, value::double from metrics.{metric} where seq in (0, 1) order by seq"
@@ -169,10 +170,10 @@ pub fn diff(
             }
             continue;
         }
-        let Some(spec) = SPECS.iter().find(|s| s.0 == metric) else {
-            debug_assert!(HISTORY.contains(&metric.as_str()), "{metric} is not placed");
-            continue;
-        };
+        let spec = SPECS
+            .iter()
+            .find(|s| s.0 == metric)
+            .expect("every metric but HISTORY's is in SPECS or TAILS");
         if b.is_none() && h.is_none() {
             continue;
         }
@@ -200,15 +201,8 @@ fn record(db: &mut Connection, repo: &gix::Repository, commits: &[&gix::Commit; 
     {
         let mut rows = tx.appender("commits")?;
         for (seq, c) in commits.iter().enumerate() {
-            let author = c.author()?;
-            rows.append_row(params![
-                seq,
-                c.id.to_string(),
-                Value::Timestamp(TimeUnit::Second, c.time()?.seconds),
-                author.name.to_string(),
-                author.email.to_string(),
-                c.message_raw()?.to_string()
-            ])?;
+            let (time, name, email, message) = commit_row(c)?;
+            rows.append_row(params![seq, c.id.to_string(), time, name, email, message])?;
         }
     }
     let (base, head) = (commits[0].tree()?, commits[1].tree()?);
@@ -235,35 +229,17 @@ fn record(db: &mut Connection, repo: &gix::Repository, commits: &[&gix::Commit; 
     };
     let base_files = files(&base)?;
     let a = attributes(&base_files)?;
-    for (path, blob) in &base_files {
-        let lines = None::<i32>; // BASE's files are no change: no lines counted
-        changes.append_row(params![
-            0,
-            path,
-            blob,
-            a.role(path)?,
-            a.test_features(path),
-            None::<String>,
-            lines,
-            lines
-        ])?;
+    for (path, blob) in base_files {
+        // BASE's files are no change: no lines counted.
+        let row = Row {
+            blob: Some(blob),
+            ..Row::default()
+        };
+        append_change(&mut changes, 0, &path, &row, &a)?;
     }
     let a = attributes(&files(&head)?)?;
     for (path, row) in diff_trees(repo, &base, &head)? {
-        let Row {
-            blob,
-            source,
-            lines,
-            ..
-        } = row;
-        let (role, features) = match blob {
-            Some(_) => (a.role(&path)?, a.test_features(&path)),
-            None => (None, None),
-        };
-        let (added, deleted) = lines.unzip();
-        changes.append_row(params![
-            1, path, blob, role, features, source, added, deleted
-        ])?;
+        append_change(&mut changes, 1, &path, &row, &a)?;
     }
     drop(changes);
     tx.commit()?;
@@ -285,9 +261,10 @@ fn reuse_spans(db: &Connection, path: &Path) -> Result<usize> {
         [crate::db::V],
     )?;
     db.execute_batch("detach scanned")?;
-    let blobs: usize = db.query_row("select count(distinct blob) from spans", [], |r| r.get(0))?;
-    ensure!(copied == 0 || blobs > 0, "copied spans belong to blobs");
-    Ok(blobs)
+    if copied == 0 {
+        return Ok(0);
+    }
+    Ok(db.query_row("select count(distinct blob) from spans", [], |r| r.get(0))?)
 }
 
 /// Per-unit rows at seq 0 and 1: each production function, and each production
@@ -522,7 +499,7 @@ mod tests {
     fn every_metric_is_placed() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(codevitals::SQL).unwrap();
-        for m in crate::metrics::list(&db).unwrap() {
+        for m in crate::metrics::list(&db, "metrics").unwrap() {
             let placed = SPECS.iter().any(|s| s.0 == m)
                 || TAILS.iter().any(|t| t.0 == m)
                 || HISTORY.contains(&m.as_str());

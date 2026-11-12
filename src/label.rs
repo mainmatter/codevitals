@@ -209,11 +209,10 @@ pub fn run(repo: &gix::Repository, db: &mut Connection, file: &Path) -> Result<u
         db,
         &["units.functions".into(), "author_file_commits".into()],
     )?;
-    let candidates: Vec<Candidate> = db
+    let mut candidates: Vec<Candidate> = db
         .prepare(
             "select path, lineage, lang, blob, start_byte, end_byte, line, tokens from units.functions
-             where since <= $1 and $1 < until and tokens between $2 and $3 and end_line - line < $4
-             order by path, start_byte",
+             where since <= $1 and $1 < until and tokens between $2 and $3 and end_line - line < $4",
         )?
         .query_map(params![tip, MIN_TOKENS, MAX_TOKENS, MAX_LINES], |r| {
             Ok(Candidate {
@@ -228,6 +227,8 @@ pub fn run(repo: &gix::Repository, db: &mut Connection, file: &Path) -> Result<u
             })
         })?
         .collect::<Result<_, _>>()?;
+    // In a fixed order, sorted here (see `db::open` on ORDER BY).
+    candidates.sort_by(|a, b| (&a.path, a.start).cmp(&(&b.path, b.start)));
     ensure!(
         candidates.len() >= 2,
         "fewer than two production functions of {MIN_TOKENS} to {MAX_TOKENS} tokens to compare"

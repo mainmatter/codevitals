@@ -38,13 +38,8 @@ fn catalog(db: &Connection) -> Result<Vec<(String, String)>> {
         .collect())
 }
 
-/// Every metric's name, in definition order.
-pub fn list(db: &Connection) -> Result<Vec<String>> {
-    Ok(catalog(db)?.into_iter().map(|(name, _)| name).collect())
-}
-
 /// Every view's name in `schema` (`metrics` or `experimental`), in definition order.
-pub fn list_in(db: &Connection, schema: &str) -> Result<Vec<String>> {
+pub fn list(db: &Connection, schema: &str) -> Result<Vec<String>> {
     Ok(views(db, schema)?
         .into_iter()
         .map(|(name, _)| name)
@@ -155,13 +150,9 @@ pub fn cache_helpers(db: &mut Connection, roots: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// One JSON object mapping each metric in `names` to its rows, each with the commit `time` (ISO 8601 UTC) after `seq`.
-pub fn export(db: &mut Connection, names: &[String]) -> Result<String> {
-    export_in(db, "metrics", names)
-}
-
-/// As `export`, for the views of `schema`.
-pub fn export_in(db: &mut Connection, schema: &str, names: &[String]) -> Result<String> {
+/// One JSON object mapping each view of `schema` in `names` to its rows, each with the
+/// commit `time` (ISO 8601 UTC) after `seq`.
+pub fn export(db: &mut Connection, schema: &str, names: &[String]) -> Result<String> {
     let roots: Vec<String> = names.iter().map(|m| format!("{schema}.{m}")).collect();
     cache_helpers(db, &roots)?;
     let (code_commits, windows, size, weeks): (i64, i64, i64, i64) = db.query_row(

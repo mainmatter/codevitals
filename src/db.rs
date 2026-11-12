@@ -49,11 +49,18 @@ pub fn scanned_repo(db: &Connection, over: Option<&Path>) -> Result<gix::Reposit
 
 /// The newest scanned commit: its seq and id.
 pub fn tip(db: &Connection) -> Result<(i32, String)> {
-    Ok(db.query_row(
-        "select seq, id from commits order by seq desc limit 1",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?)
+    stored_tip(db)?.context("the database has no commits")
+}
+
+/// The newest scanned commit, if any.
+pub fn stored_tip(db: &Connection) -> Result<Option<(i32, String)>> {
+    Ok(db
+        .query_row(
+            "select seq, id from commits order by seq desc limit 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
 }
 
 /// A stored object id.
@@ -106,6 +113,10 @@ fn open_with(path: &Path, access: AccessMode, defer: bool) -> Result<(Connection
                 "open database {path:?} (another codevitals may be using it; DuckDB allows one writer)"
             )
         })?;
+        // Not preserving insertion order saves memory materializing large views. It
+        // has a cost: this DuckDB then returns a result of more than about 120,000 rows
+        // out of order even under ORDER BY. So no reader relies on a large result's
+        // order: it sorts or groups in Rust, or aggregates with `list(... order by)`.
         db.execute_batch(&format!(
             "set memory_limit = '{MEMORY_LIMIT}'; set max_temp_directory_size = '{SPILL_LIMIT}';
              set preserve_insertion_order = false"
@@ -150,7 +161,7 @@ fn open_with(path: &Path, access: AccessMode, defer: bool) -> Result<(Connection
     let rest = move |db: &Connection| -> Result<()> {
         db.execute_batch(codevitals::VIEWS_SQL)
             .context("apply codevitals' SQL")?;
-        db.execute_batch(&format!("create macro codevitals_sql() as '{hash}'"))?;
+        db.execute_batch(&codevitals::sql_mark())?;
         Ok(())
     };
     if !defer {

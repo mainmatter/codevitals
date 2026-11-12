@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use duckdb::types::{TimeUnit, Value};
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{Connection, params};
 use gix::ObjectId;
 use gix::object::tree::diff::ChangeDetached as Change;
 use rayon::prelude::*;
@@ -26,13 +26,7 @@ pub fn walk(
     repo: &gix::Repository,
     rev: &str,
 ) -> Result<(usize, usize)> {
-    let tip = db
-        .query_row(
-            "select seq, id from commits order by seq desc limit 1",
-            [],
-            |r| Ok((r.get::<_, i32>(0)?, oid(&r.get::<_, String>(1)?))),
-        )
-        .optional()?;
+    let tip = crate::db::stored_tip(db)?.map(|(seq, id)| (seq, oid(&id)));
     let find = |id: ObjectId| {
         repo.find_commit(id).with_context(|| match repo.is_shallow().unwrap_or(false) {
             true => format!(
@@ -100,50 +94,18 @@ pub fn walk(
                 |repo, &id| -> Result<Diffed> {
                     let commit = repo.find_commit(id)?;
                     let rows = diff(repo, &commit).with_context(|| format!("diff commit {id}"))?;
-                    let author = commit.author()?;
-                    Ok((
-                        id,
-                        rows,
-                        Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
-                        author.name.to_string(),
-                        author.email.to_string(),
-                        commit.message_raw()?.to_string(),
-                    ))
+                    Ok((id, rows, commit_row(&commit)?))
                 },
             )
             .collect::<Result<_>>()?;
-        for (id, rows, time, name, email, message) in diffed {
+        for (id, rows, (time, name, email, message)) in diffed {
             commits.append_row(params![seq, id.to_string(), time, name, email, message])?;
             for (path, row) in rows.iter().filter(|(p, _)| Attributes::is_file(p)) {
                 attributes.set(path, row.blob.as_deref().map(read).transpose()?);
             }
             for (path, row) in &rows {
-                let Row {
-                    blob,
-                    source,
-                    lines,
-                    ..
-                } = row;
-                let (added, deleted) = lines.unzip();
-                let (attr, test_features) = match blob {
-                    Some(_) => (
-                        attributes
-                            .role(path)
-                            .with_context(|| format!("commit {id}"))?,
-                        attributes.test_features(path),
-                    ),
-                    None => (None, None),
-                };
-                changed.append_row(params![
-                    seq,
-                    path,
-                    blob,
-                    attr,
-                    test_features,
-                    source,
-                    added,
-                    deleted
-                ])?;
+                append_change(&mut changed, seq, path, row, &attributes)
+                    .with_context(|| format!("commit {id}"))?;
             }
             debug!(seq, %id, changes = rows.len(), "commit");
             seq += 1;
@@ -203,14 +165,48 @@ fn mailmap(db: &mut Connection, repo: &gix::Repository, head: ObjectId) -> Resul
 }
 
 /// A diffed commit: its id, changes, time, author name and email, and message.
-type Diffed = (
-    ObjectId,
-    BTreeMap<String, Row>,
-    Value,
-    String,
-    String,
-    String,
-);
+type Diffed = (ObjectId, BTreeMap<String, Row>, CommitRow);
+
+/// A `commits` row after its seq and id: the commit time, author name and email,
+/// and message.
+pub type CommitRow = (Value, String, String, String);
+
+pub fn commit_row(commit: &gix::Commit) -> Result<CommitRow> {
+    let author = commit.author()?;
+    Ok((
+        Value::Timestamp(TimeUnit::Second, commit.time()?.seconds),
+        author.name.to_string(),
+        author.email.to_string(),
+        commit.message_raw()?.to_string(),
+    ))
+}
+
+/// Appends the `changes` row of `path` at commit `seq`: a present file gets its role
+/// and test features from `attributes`, a deleted one neither.
+pub fn append_change(
+    changes: &mut duckdb::Appender,
+    seq: i32,
+    path: &str,
+    row: &Row,
+    attributes: &Attributes,
+) -> Result<()> {
+    let (role, test_features) = match row.blob {
+        Some(_) => (attributes.role(path)?, attributes.test_features(path)),
+        None => (None, None),
+    };
+    let (added, deleted) = row.lines.unzip();
+    changes.append_row(params![
+        seq,
+        path,
+        row.blob,
+        role,
+        test_features,
+        row.source,
+        added,
+        deleted
+    ])?;
+    Ok(())
+}
 
 /// A commit's change to one path.
 #[derive(Default)]

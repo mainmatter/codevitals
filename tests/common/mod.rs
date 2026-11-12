@@ -35,8 +35,7 @@ fn template() -> &'static Path {
             let partial = path.with_extension(format!("{}.partial", std::process::id()));
             let conn = duckdb::Connection::open(&partial).unwrap();
             conn.execute_batch(codevitals::SQL).unwrap();
-            conn.execute_batch(&format!("create macro codevitals_sql() as '{hash}'"))
-                .unwrap();
+            conn.execute_batch(&codevitals::sql_mark()).unwrap();
             drop(conn);
             std::fs::rename(&partial, &path).unwrap();
         }
