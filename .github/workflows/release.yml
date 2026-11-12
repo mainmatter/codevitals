@@ -10,7 +10,7 @@
 # reason CI does not run on the release PR itself; it runs on main once the PR is
 # merged (a push by whoever merged it).
 #
-# Actions are pinned to commit SHAs; Dependabot (.github/dependabot.yml) bumps them.
+# Actions are pinned to commit SHAs; Renovate bumps them.
 name: release
 on:
   push:

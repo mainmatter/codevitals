@@ -62,7 +62,8 @@ runs:
           exit 1
         fi
         tar -xzf "$RUNNER_TEMP/$asset" -C "$dir"
-        echo "$dir" >> "$GITHUB_PATH"
+        # Not added to GITHUB_PATH: the next step calls it by path, and the caller's
+        # later steps keep their PATH.
         "$dir/cv" --version
     - name: Scan and compute metrics
       shell: bash
@@ -70,10 +71,11 @@ runs:
         METRICS: ${{ inputs.metrics }}
       run: |
         set -euo pipefail
-        cv scan --db "$RUNNER_TEMP/codevitals.duckdb"
+        cv="$RUNNER_TEMP/codevitals-bin/cv"
+        "$cv" scan --db "$RUNNER_TEMP/codevitals.duckdb"
         # METRICS is unquoted on purpose: one argument per name, without globbing.
         set -f
-        cv metrics --db "$RUNNER_TEMP/codevitals.duckdb" "$RUNNER_TEMP/metrics.json" $METRICS
+        "$cv" metrics --db "$RUNNER_TEMP/codevitals.duckdb" "$RUNNER_TEMP/metrics.json" $METRICS
     - name: Publish metrics.json
       shell: bash
       env:
