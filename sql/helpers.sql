@@ -65,14 +65,6 @@ create or replace macro lang_family(lang) as
 create or replace macro family_ratio(num, den, lang, fam) as
   sum(num) filter (lang_family(lang) = fam) / nullif(sum(den) filter (lang_family(lang) = fam), 0);
 
--- Whether a span is a non-local exit as `exceptions` counts them: throw, raise,
--- longjmp, and Rust's panic!, unreachable!, todo!, unimplemented!, unwrap and expect,
--- which the intent kinds (invariant, unhandled, unfinished) split. Elsewhere those
--- kinds are no throws of their own (a raise NotImplementedError is also a throw).
-create or replace macro is_throw(kind, name, lang) as
-  kind = 'throw'
-  or (lang = 'rust' and (kind in ('unhandled', 'unfinished') or (kind = 'invariant' and name = 'unreachable')));
-
 -- Whether a `test_if` span's code is test code: `gate` (conjunctions joined by `|`,
 -- features by `&`) holds when every feature of some conjunction is test-only, by
 -- name or because `declared` (features joined by `,`) lists it.
@@ -307,7 +299,7 @@ inner_sums as (
 counts as (
   select blob, test_features, start_byte, end_byte,
          count(*) filter (kind in ('branch', 'condition')) as decisions,
-         count(*) filter (is_throw(kind, name, lang)) as throws,
+         count(*) filter (kind = 'throw') as throws,
          count(*) filter (kind = 'goto') as gotos,
          count(*) filter (kind = 'invariant') as invariants,
          count(*) filter (kind = 'unhandled') as unhandled,
@@ -353,7 +345,7 @@ counts as (
     coalesce(sum(tokens) filter (kind = 'file'), 0) as tokens,
     count(*) filter (kind in ('branch', 'condition')) as decisions,
     count(*) filter (kind = 'global_state') as global_state,
-    count(*) filter (is_throw(kind, name, lang)) as throws,
+    count(*) filter (kind = 'throw') as throws,
     count(*) filter (kind = 'goto') as gotos,
     count(*) filter (kind = 'invariant') as invariants,
     count(*) filter (kind = 'unhandled') as unhandled,

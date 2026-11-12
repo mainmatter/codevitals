@@ -129,6 +129,7 @@ fn f(x: Option<i32>) -> i32 {
 block 2 0 77
 branch 3 0 61
 condition 3 0 13
+throw 3 0 5
 unhandled 3 0 5
 block 3 1 28
 branch 4 1 26
@@ -139,6 +140,7 @@ block 5 3 10
 throw 5 0 7
 branch 7 1 18
 block 7 1 12
+throw 8 0 8
 unhandled 8 0 8
 branch 10 0 7
 branch 10 0 3
@@ -568,7 +570,8 @@ fn panics_by_intent() {
             "x.rs",
             "fn f() { assert!(a); debug_assert_eq!(a, b); unreachable!(); panic!(); todo!(); unimplemented!(); x.unwrap(); y.expect(\"e\"); x.unwrap_or(1); }"
         ),
-        "invariant:assert invariant:debug_assert_eq invariant:unreachable throw: unfinished: unfinished: unhandled: unhandled:"
+        // Panics that exit non-locally are also throws, for exceptions.
+        "invariant:assert invariant:debug_assert_eq invariant:unreachable throw: throw: throw: unfinished: throw: unfinished: throw: unhandled: throw: unhandled:"
     );
     assert_eq!(
         kinds(

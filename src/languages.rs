@@ -28,6 +28,7 @@ pub const KINDS: &[&str] = &[
     "global_state", "throw", "goto", "package", "alias", "alias_target", "base_url",
     // Panics by intent: a stated invariant (assert, unreachable), a fallible operation
     // left unhandled (Rust unwrap, expect), unfinished code (todo, NotImplementedError).
+    // Those that exit non-locally are also captured as `throw`.
     "invariant", "unhandled", "unfinished",
     // What qualifies the names of the functions inside: a Rust impl or trait, a class,
     // a C++ namespace.
