@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use gix::diff::blob::{Algorithm, Diff, InternedInput};
-use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{
+    InputEdit, Node, Parser, Point, Query, QueryCapture, QueryCursor, StreamingIterator, Tree,
+};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::Lang;
@@ -32,10 +34,7 @@ pub struct Span {
 /// Parse `src`, run the language's query and return the `file` span followed by
 /// every captured span in source order (outer before inner).
 pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
-    let tree = parser(lang)
-        .parse(src, None)
-        .expect("parse has no timeout or cancellation");
-    spans(lang, src, &tree)
+    Incremental::new().extract(lang, src)
 }
 
 /// A parser for `lang`.
@@ -48,12 +47,15 @@ fn parser(lang: Lang) -> Parser {
 }
 
 /// `extract` over a sequence of blobs, each usually a version of the one before (a
-/// file's history): it parses each blob incrementally, reusing the syntax tree of the
-/// one before where their bytes agree. Its output is `extract`'s, whatever the order
-/// of the blobs; only its speed depends on how alike successive blobs are.
+/// file's history). It parses each blob as an edit of the one before, reusing the
+/// syntax tree where their bytes agree, and copies the facts of every subtree the
+/// edit left unchanged (its query matches, comments and code leaves, shifted) from
+/// the blob before instead of finding them again. Its output is `extract`'s,
+/// whatever the order of the blobs; only its speed depends on how alike successive
+/// blobs are.
 pub struct Incremental {
-    /// The language, bytes and syntax tree of the last blob extracted.
-    last: Option<(Lang, Vec<u8>, Tree)>,
+    /// The language, bytes, syntax tree and facts of the last blob extracted.
+    last: Option<(Lang, Vec<u8>, Tree, Facts)>,
     parser: Option<(Lang, Parser)>,
 }
 
@@ -77,22 +79,346 @@ impl Incremental {
             Some((l, p)) if l.name == lang.name => p,
             slot => &mut slot.insert((lang, parser(lang))).1,
         };
-        let old = match self.last.take() {
-            Some((l, old_src, mut tree)) if l.name == lang.name => {
-                for edit in edits(&old_src, src) {
-                    tree.edit(&edit);
+        let last = self.last.take().filter(|(l, ..)| l.name == lang.name);
+        let (old, changes) = match last {
+            Some((_, old_src, mut tree, facts)) => {
+                let edits = edits(&old_src, src);
+                for edit in &edits {
+                    tree.edit(edit);
                 }
-                Some(tree)
+                (Some((tree, facts)), Changes::of(&edits))
             }
-            _ => None,
+            None => (None, Changes::default()),
         };
         let tree = parser
-            .parse(src, old.as_ref())
+            .parse(src, old.as_ref().map(|(tree, _)| tree))
             .expect("parse has no timeout or cancellation");
-        let spans = spans(lang, src, &tree);
-        self.last = Some((lang, src.to_vec(), tree));
+        let old = old.map(|(old_tree, facts)| {
+            let mut changes = changes;
+            changes.add(
+                old_tree
+                    .changed_ranges(&tree)
+                    .map(|r| r.start_byte..r.end_byte),
+            );
+            (facts, changes)
+        });
+        let facts = facts(lang, src, &tree, old.as_ref().map(|(f, c)| (f, c)));
+        let spans = spans(lang, src, &tree, &facts);
+        self.last = Some((lang, src.to_vec(), tree, facts));
         spans
     }
+}
+
+/// Where a new blob differs from the one before: the edited and reparsed byte
+/// ranges (sorted and merged), and how far each edit moved the text after it.
+#[derive(Default)]
+struct Changes {
+    dirty: Vec<Range<usize>>,
+    /// Per edit, in order: where its new text ends, and the bytes and rows the
+    /// text after it moved by, all edits so far included.
+    shifts: Vec<(usize, Shift)>,
+}
+
+/// How far a stretch of unchanged text moved between two blobs. Edits replace
+/// whole lines, so columns do not move.
+#[derive(Clone, Copy, Default, Debug)]
+struct Shift {
+    bytes: isize,
+    rows: isize,
+}
+
+impl Changes {
+    /// The changes of `edits`, which `edits` lists last first.
+    fn of(edits: &[InputEdit]) -> Changes {
+        let (mut changes, mut moved) = (Changes::default(), Shift::default());
+        for e in edits.iter().rev() {
+            let start = e.start_byte.wrapping_add_signed(moved.bytes);
+            let end = start + (e.new_end_byte - e.start_byte);
+            changes.dirty.push(start..end);
+            moved.bytes += e.new_end_byte as isize - e.old_end_byte as isize;
+            moved.rows += e.new_end_position.row as isize - e.old_end_position.row as isize;
+            changes.shifts.push((end, moved));
+        }
+        changes
+    }
+
+    /// Mark `ranges` changed too.
+    fn add(&mut self, ranges: impl Iterator<Item = Range<usize>>) {
+        self.dirty.extend(ranges);
+        self.dirty.sort_by_key(|r| r.start);
+        let mut merged: Vec<Range<usize>> = Vec::with_capacity(self.dirty.len());
+        for r in self.dirty.drain(..) {
+            match merged.last_mut() {
+                Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+                _ => merged.push(r),
+            }
+        }
+        self.dirty = merged;
+    }
+
+    /// How far the text at `bytes` moved, if neither it nor its ends were changed.
+    fn unchanged(&self, bytes: Range<usize>) -> Option<Shift> {
+        let i = self.dirty.partition_point(|r| r.end < bytes.start);
+        if self.dirty.get(i).is_some_and(|r| r.start <= bytes.end) {
+            return None;
+        }
+        let edits_before = self.shifts.partition_point(|(end, _)| *end <= bytes.start);
+        Some(
+            edits_before
+                .checked_sub(1)
+                .map_or(Shift::default(), |i| self.shifts[i].1),
+        )
+    }
+}
+
+/// What `spans` reads from a syntax tree, as plain data with absolute positions:
+/// kept from one blob to the next, so an unchanged subtree's facts are copied.
+#[derive(Default)]
+struct Facts {
+    /// Every query match, in pre-order of the nodes they are rooted at.
+    matches: Vec<Match>,
+    /// Where zero-width nodes root a match: a subtree ending or starting there may
+    /// not own it, so it is not copied.
+    zero_width: Vec<usize>,
+    /// Code leaves as (start, end, kind_id), in source order: the leaves of the
+    /// tree outside comments.
+    leaves: Vec<(usize, usize, u16)>,
+    /// ERROR and MISSING nodes.
+    errors: usize,
+}
+
+/// One query match: the range of the node it is rooted at, and what it captured.
+#[derive(Clone)]
+struct Match {
+    root: (usize, usize),
+    span: Option<(&'static str, At)>,
+    name: Option<String>,
+    params: Option<At>,
+    /// Comments as (start, end, words).
+    comments: Vec<(usize, usize, usize)>,
+    attributes: Vec<At>,
+}
+
+impl Match {
+    fn shifted(mut self, by: Shift) -> Match {
+        let b = |x: usize| x.wrapping_add_signed(by.bytes);
+        self.root = (b(self.root.0), b(self.root.1));
+        self.span = self.span.map(|(kind, at)| (kind, at.shifted(by)));
+        self.params = self.params.map(|at| at.shifted(by));
+        for c in &mut self.comments {
+            *c = (b(c.0), b(c.1), c.2);
+        }
+        for a in &mut self.attributes {
+            *a = a.shifted(by);
+        }
+        self
+    }
+}
+
+/// A node by its position and kind, to find again in the tree.
+#[derive(Clone, Copy, Debug)]
+struct At {
+    start: (usize, Point),
+    end: (usize, Point),
+    kind: u16,
+}
+
+impl At {
+    fn of(n: Node) -> At {
+        At {
+            start: (n.start_byte(), n.start_position()),
+            end: (n.end_byte(), n.end_position()),
+            kind: n.kind_id(),
+        }
+    }
+
+    fn shifted(self, by: Shift) -> At {
+        let p = |(b, p): (usize, Point)| {
+            let row = p.row.wrapping_add_signed(by.rows);
+            (b.wrapping_add_signed(by.bytes), Point::new(row, p.column))
+        };
+        At {
+            start: p(self.start),
+            end: p(self.end),
+            kind: self.kind,
+        }
+    }
+
+    /// The node in `tree`: the outermost of its kind over its bytes.
+    fn node(self, tree: &Tree) -> Node<'_> {
+        let (start, end) = (self.start.0, self.end.0);
+        let at = |n: &Node| n.start_byte() == start && n.end_byte() == end;
+        let mut n = tree
+            .root_node()
+            .descendant_for_byte_range(start, end)
+            .expect("the node is in the tree");
+        let mut found = None;
+        loop {
+            if at(&n) && n.kind_id() == self.kind {
+                found = Some(n);
+            }
+            match n.parent() {
+                Some(p) if at(&p) || found.is_none() => n = p,
+                _ => break,
+            }
+        }
+        found.expect("the node is in the tree")
+    }
+}
+
+/// The facts of `tree`. With the facts of the blob before and what changed since,
+/// those of each maximal unchanged subtree (without parse errors) are copied, shifted;
+/// the rest are found by running the query rooted at each remaining node, and by
+/// walking them for leaves.
+fn facts(lang: Lang, src: &[u8], tree: &Tree, old: Option<(&Facts, &Changes)>) -> Facts {
+    let query = lang.compiled_query();
+    let mut cursor = QueryCursor::new();
+    cursor.set_max_start_depth(Some(0));
+    let mut facts = Facts::default();
+    // The nodes walked, in pre-order, with their depth and, for the copied ones, how
+    // far they moved and where they were.
+    let mut walked = Vec::<(Node, usize, Option<(Shift, Range<usize>)>)>::new();
+    let copyable = |n: Node| -> Option<(Shift, Range<usize>)> {
+        let (old, changes) = old?;
+        if n.has_error() {
+            return None;
+        }
+        let shift = changes.unchanged(n.byte_range())?;
+        let back = |x: usize| x.wrapping_add_signed(-shift.bytes);
+        let was = back(n.start_byte())..back(n.end_byte());
+        let at_edge = |p: &usize| *p == was.start || *p == was.end;
+        let i = old.zero_width.partition_point(|p| *p < was.start);
+        (!old.zero_width[i..]
+            .iter()
+            .take_while(|p| **p <= was.end)
+            .any(at_edge))
+        .then_some((shift, was))
+    };
+    let mut walk = tree.walk();
+    let mut depth = 0;
+    'walk: loop {
+        let n = walk.node();
+        let copied = copyable(n);
+        match (&copied, old) {
+            (Some((shift, was)), Some((old, _))) => {
+                let from = old.matches.partition_point(|m| m.root.0 < was.start);
+                facts.matches.extend(
+                    old.matches[from..]
+                        .iter()
+                        .take_while(|m| m.root.0 <= was.end)
+                        .filter(|m| m.root.1 <= was.end)
+                        .map(|m| m.clone().shifted(*shift)),
+                );
+            }
+            _ => {
+                let mut matches = cursor.matches(query, n, src);
+                while let Some(m) = matches.next() {
+                    facts.matches.push(matched(query, src, n, m.captures));
+                }
+            }
+        }
+        let descend = copied.is_none();
+        walked.push((n, depth, copied));
+        if descend && walk.goto_first_child() {
+            depth += 1;
+            continue;
+        }
+        loop {
+            if walk.goto_next_sibling() {
+                continue 'walk;
+            }
+            if !walk.goto_parent() {
+                break 'walk;
+            }
+            depth -= 1;
+        }
+    }
+    facts.zero_width = facts
+        .matches
+        .iter()
+        .filter(|m| m.root.0 == m.root.1)
+        .map(|m| m.root.0)
+        .collect();
+
+    // Code leaves and errors. Pre-order visits nodes in non-decreasing start order,
+    // so one forward pass over the sorted comments finds each comment node.
+    let mut comments: Vec<(usize, usize)> = facts
+        .matches
+        .iter()
+        .flat_map(|m| m.comments.iter().map(|c| (c.0, c.1)))
+        .collect();
+    comments.sort_unstable();
+    comments.dedup();
+    let mut pending = comments.iter().peekable();
+    let has_errors = tree.root_node().has_error();
+    let mut comment_depth = None; // depth of the comment node we are inside
+    for (n, depth, copied) in walked {
+        let (start, end) = (n.start_byte(), n.end_byte());
+        if comment_depth.is_some_and(|d| depth <= d) {
+            comment_depth = None;
+        }
+        if has_errors {
+            facts.errors += usize::from(n.is_error() || n.is_missing());
+        }
+        if comment_depth.is_none() {
+            while pending.next_if(|c| c.0 < start).is_some() {}
+            if pending.next_if_eq(&&(start, end)).is_some() {
+                comment_depth = Some(depth);
+            }
+        }
+        if comment_depth.is_some() {
+            continue;
+        }
+        match (copied, old) {
+            (Some((shift, was)), Some((old, _))) => {
+                let from = old.leaves.partition_point(|l| l.0 < was.start);
+                let b = |x: usize| x.wrapping_add_signed(shift.bytes);
+                facts.leaves.extend(
+                    old.leaves[from..]
+                        .iter()
+                        .take_while(|l| l.1 <= was.end)
+                        .map(|l| (b(l.0), b(l.1), l.2)),
+                );
+            }
+            _ if n.child_count() == 0 && start < end => {
+                facts.leaves.push((start, end, n.kind_id()))
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        facts.leaves.windows(2).all(|w| w[0].1 <= w[1].0),
+        "leaves are disjoint and ordered"
+    );
+    facts
+}
+
+/// A match rooted at `root`, from its captures.
+fn matched(query: &'static Query, src: &[u8], root: Node, captures: &[QueryCapture]) -> Match {
+    let text = |n: Node| String::from_utf8_lossy(&src[n.byte_range()]).into_owned();
+    let mut m = Match {
+        root: (root.start_byte(), root.end_byte()),
+        span: None,
+        name: None,
+        params: None,
+        comments: vec![],
+        attributes: vec![],
+    };
+    for c in captures {
+        match query.capture_names()[c.index as usize] {
+            "comment" => {
+                let words = text(c.node).split_whitespace().count();
+                m.comments
+                    .push((c.node.start_byte(), c.node.end_byte(), words));
+            }
+            "name" => m.name = m.name.take().or_else(|| Some(text(c.node))),
+            "params" => m.params = m.params.or(Some(At::of(c.node))),
+            "attr" => m.attributes.push(At::of(c.node)),
+            private if private.starts_with('_') => {} // query-internal, e.g. for predicates
+            kind => m.span = m.span.or(Some((kind, At::of(c.node)))),
+        }
+    }
+    m
 }
 
 /// The edits that turn `old` into `new`, for `Tree::edit`: one per hunk of a line
@@ -171,9 +497,8 @@ pub fn edits(old: &[u8], new: &[u8]) -> Vec<InputEdit> {
     out
 }
 
-/// The spans of `src`, whose syntax tree is `tree`.
-fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
-    let query = lang.compiled_query();
+/// The spans of `src`, whose syntax tree is `tree` and whose facts are `facts`.
+fn spans(lang: Lang, src: &[u8], tree: &Tree, facts: &Facts) -> Vec<Span> {
     let text = |n: Node| String::from_utf8_lossy(&src[n.byte_range()]).into_owned();
 
     // Comments as (start, end) -> word count, and spans keyed by identity
@@ -181,28 +506,20 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
     let mut comments = BTreeMap::new();
     let mut spans = BTreeMap::<_, Captured>::new();
     let mut attributes = Vec::new();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, tree.root_node(), src);
-    while let Some(m) = matches.next() {
-        let (mut span, mut name, mut params) = (None, None, None);
-        for c in m.captures {
-            match query.capture_names()[c.index as usize] {
-                "comment" => {
-                    let words = text(c.node).split_whitespace().count();
-                    comments.insert((c.node.start_byte(), c.node.end_byte()), words);
-                }
-                "name" => name = name.or(Some(c.node)),
-                "params" => params = params.or(Some(c.node)),
-                "attr" => attributes.push(c.node),
-                private if private.starts_with('_') => {} // query-internal, e.g. for predicates
-                kind => span = span.or(Some((kind, c.node))),
-            }
-        }
-        if let Some((kind, node)) = span {
-            let key = (node.start_byte(), Reverse(node.end_byte()), kind);
-            let merged = spans.entry(key).or_insert(Captured::of(node));
-            merged.name = merged.name.take().or(name.map(text));
-            merged.params = merged.params.or(params);
+    for m in &facts.matches {
+        comments.extend(m.comments.iter().map(|&(s, e, words)| ((s, e), words)));
+        attributes.extend(m.attributes.iter().map(|a| a.node(tree)));
+        if let Some((kind, at)) = m.span {
+            let key = (at.start.0, Reverse(at.end.0), kind);
+            let merged = spans.entry(key).or_insert(Captured {
+                start: at.start,
+                end: at.end,
+                node: Some(at),
+                name: None,
+                params: None,
+            });
+            merged.name = merged.name.take().or_else(|| m.name.clone());
+            merged.params = merged.params.or(m.params);
         }
     }
     // Code compiled only for tests: each test attribute's item, attributes included.
@@ -226,54 +543,7 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
     }
 
     let is_comment = |n: Node| comments.contains_key(&(n.start_byte(), n.end_byte()));
-
-    // Code leaves as (start, end, kind_id) in source order, and the error count.
-    // Pre-order visits nodes in non-decreasing start order, so one forward pass over
-    // the sorted comments finds each comment node.
-    let mut leaves = Vec::<(usize, usize, u16)>::new();
-    let mut errors = 0;
-    let has_errors = tree.root_node().has_error();
-    let mut pending = comments.keys().peekable();
-    let mut walk = tree.walk();
-    // Track depth ourselves: `TreeCursor::depth` rescans the cursor's stack on every call.
-    let mut depth = 0usize;
-    let mut comment_depth = None; // depth of the comment node we are inside
-    'walk: loop {
-        let n = walk.node();
-        let (start, end) = (n.start_byte(), n.end_byte());
-        if has_errors {
-            errors += usize::from(n.is_error() || n.is_missing());
-        }
-        if comment_depth.is_none() {
-            while pending.next_if(|c| c.0 < start).is_some() {}
-            if pending.next_if_eq(&&(start, end)).is_some() {
-                comment_depth = Some(depth);
-            }
-        }
-        if walk.goto_first_child() {
-            depth += 1;
-            continue;
-        }
-        if comment_depth.is_none() && start < end {
-            leaves.push((start, end, n.kind_id()));
-        }
-        loop {
-            if comment_depth == Some(depth) {
-                comment_depth = None;
-            }
-            if walk.goto_next_sibling() {
-                continue 'walk;
-            }
-            if !walk.goto_parent() {
-                break 'walk;
-            }
-            depth -= 1;
-        }
-    }
-    assert!(
-        leaves.windows(2).all(|w| w[0].1 <= w[1].0),
-        "leaves are disjoint and ordered"
-    );
+    let (leaves, errors) = (&facts.leaves, facts.errors);
 
     let span = |kind: &'static str, bytes: Range<usize>, start: Point, end: Point| {
         // Leaves are disjoint and sorted, so both their starts and ends are sorted.
@@ -327,7 +597,9 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
     // form a stack of end offsets: a span's depth is how many of them are still open.
     let mut open = HashMap::<&str, Vec<usize>>::new();
     let mut out = vec![file];
-    out.extend(fingerprints(lang, src, &leaves));
+    out.extend(fingerprints(lang, src, leaves));
+    // Nodes are found again only where a span needs one.
+    let impl_item = tree.language().id_for_node_kind("impl_item", true);
     for ((_, _, kind), captured) in spans {
         let Captured {
             start: (start, start_point),
@@ -343,20 +615,22 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
         }
         s.depth = int(stack.len());
         stack.push(end);
-        s.name = match node.filter(|n| n.kind() == "impl_item") {
+        s.name = match node.filter(|at| at.kind == impl_item) {
             // `impl Trait for Type`: the type, as the trait implemented for it.
-            Some(n) => impl_name(n, &text),
+            Some(at) => impl_name(at.node(tree), &text),
             None => name,
         };
-        s.params = params.map(|p| {
+        s.params = params.map(|at| {
+            let p = at.node(tree);
             int(p
                 .named_children(&mut p.walk())
                 .filter(|&n| !is_comment(n))
                 .count())
         });
+        let node = || node.map(|at| at.node(tree));
         if kind == "import" {
             // One span per imported path, all over the statement's bytes.
-            let node = node.expect("imports are captured nodes");
+            let node = node().expect("imports are captured nodes");
             for target in import_targets(node, &text) {
                 out.push(Span {
                     name: Some(target),
@@ -364,7 +638,7 @@ fn spans(lang: Lang, src: &[u8], tree: &Tree) -> Vec<Span> {
                 });
             }
         } else if kind == "fn" {
-            let extras = node.map(|n| function_extras(n, src, &leaves, &s));
+            let extras = node().map(|n| function_extras(n, src, leaves, &s));
             out.push(s);
             out.extend(extras.into_iter().flatten());
         } else {
@@ -686,24 +960,12 @@ fn impl_name(node: Node, text: &impl Fn(Node) -> String) -> Option<String> {
 /// A span to emit: its start and end (byte and point), the node it was captured
 /// as (none for test spans, which start at an attribute and end with its item),
 /// its name and its parameter list.
-struct Captured<'tree> {
+struct Captured {
     start: (usize, Point),
     end: (usize, Point),
-    node: Option<Node<'tree>>,
+    node: Option<At>,
     name: Option<String>,
-    params: Option<Node<'tree>>,
-}
-
-impl<'tree> Captured<'tree> {
-    fn of(node: Node<'tree>) -> Self {
-        Captured {
-            start: (node.start_byte(), node.start_position()),
-            end: (node.end_byte(), node.end_position()),
-            node: Some(node),
-            name: None,
-            params: None,
-        }
-    }
+    params: Option<At>,
 }
 
 /// When the code a Rust attribute applies to is compiled only for tests, as a

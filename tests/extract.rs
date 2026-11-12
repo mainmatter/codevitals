@@ -918,3 +918,66 @@ fn incremental_extraction_equals_extract() {
     }
     assert_eq!(versions, 7 * 60);
 }
+
+/// Incremental extraction copies an unchanged subtree's facts, but what depends on
+/// its surroundings is found again: a doc comment or decorator added above an
+/// unchanged function, a test attribute above an unchanged item, code wrapped into a
+/// new block or module (its depth), and a file that becomes one comment.
+#[test]
+fn incremental_extraction_rereads_the_context() {
+    let f = "fn f(a: i32) -> i32 {\n    if a > 0 { g(a) } else { 0 }\n}\n";
+    let py = "def f(x):\n    return g(x)\n";
+    let ts = "function f(a: number) { return g(a); }\n";
+    let versions: [(&str, Vec<String>); 3] = [
+        (
+            "x.rs",
+            vec![
+                f.to_owned(),
+                format!("/// Calls g.\n{f}"),
+                format!("// plain\n{f}"),
+                format!("#[cfg(test)]\n{f}"),
+                format!("mod m {{\n{f}}}\n"),
+                format!("mod m {{\nfn outer() {{\n{f}}}\n}}\n"),
+                format!("{f}// TODO later\n"),
+                format!("{f}fn broken( {{\n"),
+                "// only a comment".to_owned(),
+                f.to_owned(),
+            ],
+        ),
+        (
+            "x.py",
+            vec![
+                py.to_owned(),
+                format!("@decorated\n{py}"),
+                format!(
+                    "class C:\n{}",
+                    py.lines().map(|l| format!("    {l}\n")).collect::<String>()
+                ),
+                format!("{py}\"\"\"doc\"\"\"\n"),
+                py.to_owned(),
+            ],
+        ),
+        (
+            "x.ts",
+            vec![
+                ts.to_owned(),
+                format!("/** Calls g. */\n{ts}"),
+                format!("export {ts}"),
+                format!("class K {{\n}}\n{ts}"),
+                ts.to_owned(),
+            ],
+        ),
+    ];
+    for (path, versions) in versions {
+        let lang = Lang::of(path).unwrap();
+        let mut incremental = Incremental::new();
+        for src in versions {
+            let fresh = extract(lang, src.as_bytes());
+            assert_eq!(
+                incremental.extract(lang, src.as_bytes()),
+                fresh,
+                "{path}:\n{src}"
+            );
+        }
+    }
+}
