@@ -32,6 +32,9 @@ on:
     branches: [main]
 permissions:
   contents: write
+concurrency: # a later push's metrics must not be overwritten by an earlier one's
+  group: codevitals
+  cancel-in-progress: true
 jobs:
   codevitals:
     runs-on: ubuntu-latest
@@ -39,12 +42,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: mainmatter/codevitals@v0.1.0 # a release tag: the version of codevitals it runs
+      - uses: mainmatter/codevitals@v0.1 # the codevitals version it runs: a release (v0.1.0), its line (v0.1), or a commit SHA
         # with:
         #   metrics: size co_change_distance # default: all
 ```
 
-Each push publishes `metrics.json` to the branch `codevitals-metrics`. In Grafana
+The action runs on Linux (x64, ARM64) and macOS runners, and downloads the release
+binary matching its own version. Each push publishes `metrics.json` to the branch `codevitals-metrics`. In Grafana
 Cloud, add an Infinity data source (with a read-only token for a private
 repository), import the dashboard, and set its Metrics URL to
 `https://raw.githubusercontent.com/<owner>/<repo>/codevitals-metrics/metrics.json`.

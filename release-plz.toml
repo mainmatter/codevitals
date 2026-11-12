@@ -1,0 +1,16 @@
+# release-plz (https://release-plz.dev): every push to main updates a "release PR"
+# that bumps the version in Cargo.toml and adds the commits since the last release
+# to CHANGELOG.md. Merging it makes .github/workflows/release.yml tag the release,
+# create a draft GitHub release with those notes, build the binaries, and publish it.
+[workspace]
+# codevitals is not on crates.io: versions come from the v* git tags.
+git_only = true
+publish = false
+# A binary has no library API for cargo-semver-checks to compare.
+semver_check = false
+# Draft until every binary is attached, so the action never sees a release without
+# its binary, and immutable releases (assets locked on publish) work.
+git_release_draft = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+pr_labels = ["release"]

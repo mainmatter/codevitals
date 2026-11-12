@@ -1,4 +1,8 @@
 name: codevitals
+author: Mainmatter
+branding:
+  icon: activity
+  color: purple
 description: >-
   Record the repository's history with codevitals and publish metrics.json as the only
   commit of a branch, for a Grafana dashboard to read. Check the repository out
@@ -17,29 +21,58 @@ runs:
     - name: Install codevitals
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
-        # The action lives at .../_actions/<owner>/<repo>/<ref>; its ref names the
-        # release whose binary it runs, so the action and codevitals never drift apart.
-        tag="$(basename "$ACTION_PATH")"
-        repo="$(basename "$(dirname "$(dirname "$ACTION_PATH")")")/$(basename "$(dirname "$ACTION_PATH")")"
-        if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-          echo "::error::$repo@$tag is not a release; pin the action to a release tag, e.g. $repo@v0.1.0"
+        set -euo pipefail
+        # Run the release that the action's own ref belongs to, so the action and
+        # codevitals never drift apart. Read the version from Cargo.toml at that ref
+        # instead of from the ref's name: that works for tags (@v0.2.0), commit SHAs
+        # (@<sha>, as hardened workflows pin) and branches alike.
+        version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ACTION_PATH/Cargo.toml" | head -n1)"
+        if [[ -z "$version" ]]; then
+          echo "::error::cannot read codevitals' version from $ACTION_PATH/Cargo.toml"
           exit 1
         fi
-        asset="codevitals-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz"
-        gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$RUNNER_TEMP"
-        tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
-        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-        echo "codevitals $tag from $repo"
+        # Remote actions live at .../_actions/<owner>/<repo>/<ref>; a local one
+        # (uses: ./) is the repository being built.
+        if [[ "$ACTION_PATH" == */_actions/*/*/* ]]; then
+          ref_dir="$(dirname "$ACTION_PATH")"
+          repo="$(basename "$(dirname "$ref_dir")")/$(basename "$ref_dir")"
+        else
+          repo="$GITHUB_REPOSITORY"
+        fi
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64)   target=x86_64-unknown-linux-gnu ;;
+          Linux-ARM64) target=aarch64-unknown-linux-gnu ;;
+          macOS-X64)   target=x86_64-apple-darwin ;;
+          macOS-ARM64) target=aarch64-apple-darwin ;;
+          *)
+            echo "::error::codevitals has no binary for $RUNNER_OS on $RUNNER_ARCH; use a Linux or macOS runner"
+            exit 1
+            ;;
+        esac
+        asset="codevitals-$target.tar.gz"
+        url="https://github.com/$repo/releases/download/v$version/$asset"
+        dir="$RUNNER_TEMP/codevitals-bin"
+        mkdir -p "$dir"
+        # A plain download, not the API: no token, no API rate limit, no gh needed
+        # on self-hosted runners.
+        if ! curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$asset" "$url"; then
+          echo "::error::cannot download $url; is v$version of $repo released (and not still a draft)?"
+          exit 1
+        fi
+        tar -xzf "$RUNNER_TEMP/$asset" -C "$dir"
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/cv" --version
     - name: Scan and compute metrics
       shell: bash
       env:
         METRICS: ${{ inputs.metrics }}
       run: |
+        set -euo pipefail
         cv scan --db "$RUNNER_TEMP/codevitals.duckdb"
-        # METRICS is unquoted on purpose: one argument per name.
+        # METRICS is unquoted on purpose: one argument per name, without globbing.
+        set -f
         cv metrics --db "$RUNNER_TEMP/codevitals.duckdb" "$RUNNER_TEMP/metrics.json" $METRICS
     - name: Publish metrics.json
       shell: bash
@@ -47,6 +80,7 @@ runs:
         BRANCH: ${{ inputs.branch }}
         TOKEN: ${{ github.token }}
       run: |
+        set -euo pipefail
         out="$RUNNER_TEMP/codevitals-publish"
         mkdir -p "$out" && cp "$RUNNER_TEMP/metrics.json" "$out/"
         cd "$out"
@@ -55,4 +89,4 @@ runs:
         git -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -qm "codevitals metrics for $GITHUB_SHA"
-        git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+        git push -qf "https://x-access-token:${TOKEN}@${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"

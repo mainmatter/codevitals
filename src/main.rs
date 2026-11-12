@@ -26,7 +26,7 @@ mod walk;
 /// Logs go to stderr; set `RUST_LOG` to `debug` for one line per commit and blob,
 /// or to `off` for silence. The default is `info`: phases and progress.
 #[derive(Parser)]
-#[command(name = "cv")]
+#[command(name = "cv", version)]
 enum Cli {
     /// Record a repository's first-parent history, then parse every new blob.
     Scan {
