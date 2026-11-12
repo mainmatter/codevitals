@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::{Duration, Instant};
 
@@ -65,13 +67,22 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
     );
 
     // Workers read and extract chains of blobs in parallel, each with its own
-    // repository handle, while one writer appends them as they arrive. A message is
-    // one whole blob, so the writer's transactions never split a blob.
+    // repository handle, while `WRITERS` writers, each with its own connection, append
+    // them as they arrive. A message is one whole blob, so a writer's transactions
+    // never split a blob.
     let repo = repo.clone().into_sync();
     let total = langs.len();
+    let connections = (0..WRITERS)
+        .map(|_| db.try_clone())
+        .collect::<Result<Vec<_>, _>>()?;
+    let (send, recv) = sync_channel(BATCH);
+    let (recv, progress) = (Mutex::new(Some(recv)), AtomicUsize::new(0));
+    let (recv, progress) = (&recv, &progress);
     let written = std::thread::scope(|s| {
-        let (send, recv) = sync_channel(BATCH);
-        let writer = s.spawn(move || write_spans(db, recv, total));
+        let writers: Vec<_> = connections
+            .into_iter()
+            .map(|mut db| s.spawn(move || write_spans(&mut db, recv, progress, total)))
+            .collect();
         let produced = chains.par_iter().with_max_len(1).try_for_each_init(
             || (repo.to_thread_local(), send.clone()),
             |(repo, send), chain| -> Result<()> {
@@ -95,8 +106,11 @@ pub fn parse(db: &mut Connection, repo: &gix::Repository) -> Result<usize> {
             },
         );
         drop(send);
-        // A failed writer drops its receiver, which stops the workers: report its error first.
-        let written = writer.join().expect("the writer does not panic")?;
+        // A failed writer drops the receiver, which stops the workers: report its error first.
+        let mut written = 0;
+        for writer in writers {
+            written += writer.join().expect("writers do not panic")?;
+        }
         produced.map(|()| written)
     })?;
     assert_eq!(written, total, "every listed blob is written");
@@ -158,66 +172,93 @@ enum Content {
     Skipped,
 }
 
-/// Append parsed blobs as they arrive, committing every `BATCH` blobs.
-fn write_spans(db: &mut Connection, parsed: Receiver<Parsed>, total: usize) -> Result<usize> {
-    let mut parsed = parsed.into_iter().peekable();
+/// Connections appending spans at once. One appends about two million rows a
+/// second, slower than the workers extract them; two keep up (on RediSearch, parse
+/// 7.7 s with one, 4.7 s with two, no faster with more).
+const WRITERS: usize = 2;
+
+/// Append parsed blobs as they arrive, committing every `BATCH` blobs; return how
+/// many this writer appended. On error, drop the shared receiver, which stops the
+/// workers and the other writers.
+fn write_spans(
+    db: &mut Connection,
+    receiver: &Mutex<Option<Receiver<Parsed>>>,
+    progress: &AtomicUsize,
+    total: usize,
+) -> Result<usize> {
+    let next = || {
+        let receiver = receiver
+            .lock()
+            .expect("no writer panics holding the receiver");
+        receiver.as_ref().and_then(|r| r.recv().ok())
+    };
+    let mut parsed = std::iter::from_fn(next).peekable();
     let mut written = 0;
     while parsed.peek().is_some() {
-        let tx = db.transaction()?;
-        let mut spans = tx.appender("spans")?;
-        let mut fingerprints = tx.appender("fingerprints")?;
-        for (blob, lang, content) in parsed.by_ref().take(BATCH) {
-            written += 1;
-            // Blobs that are not parsed get rows with NULL counts.
-            let unparsed: &[&str] = match content {
-                Content::Code(extracted) => {
-                    for s in extracted {
-                        if s.kind == "fingerprint" {
-                            fingerprints.append_row(params![
-                                blob,
-                                s.hash,
-                                s.start_byte,
-                                s.end_byte
-                            ])?;
-                            continue;
-                        }
-                        spans.append_row(params![
-                            blob,
-                            V,
-                            lang.name,
-                            s.kind,
-                            s.name,
-                            s.line,
-                            s.end_line,
-                            s.tokens,
-                            s.comments,
-                            s.params,
-                            (s.kind == "fn").then_some(s.hash),
-                            s.errors,
-                            s.start_byte,
-                            s.end_byte,
-                            s.depth
-                        ])?;
-                    }
-                    &[]
-                }
-                Content::Generated => &["file", "generated"],
-                Content::Skipped => &["file"],
-            };
-            let null = None::<i32>;
-            for kind in unparsed {
-                spans.append_row(params![
-                    blob, V, lang.name, kind, null, 1, null, null, null, null, null, null, null,
-                    null, null
-                ])?;
-            }
-        }
-        spans.flush()?;
-        fingerprints.flush()?;
-        drop((spans, fingerprints));
-        tx.commit()?;
-        info!("parse: {written}/{total} blobs");
+        let appended = append(db, parsed.by_ref().take(BATCH));
+        let Ok(n) = appended else {
+            drop(parsed);
+            receiver.lock().map(|mut r| r.take()).ok();
+            return appended;
+        };
+        written += n;
+        let done = progress.fetch_add(n, Relaxed) + n;
+        info!("parse: {done}/{total} blobs");
     }
+    Ok(written)
+}
+
+/// Append `parsed` in one transaction; return how many blobs it held.
+fn append<'a>(db: &mut Connection, parsed: impl Iterator<Item = Parsed<'a>>) -> Result<usize> {
+    let mut written = 0;
+    let tx = db.transaction()?;
+    let mut spans = tx.appender("spans")?;
+    let mut fingerprints = tx.appender("fingerprints")?;
+    for (blob, lang, content) in parsed {
+        written += 1;
+        // Blobs that are not parsed get rows with NULL counts.
+        let unparsed: &[&str] = match content {
+            Content::Code(extracted) => {
+                for s in extracted {
+                    if s.kind == "fingerprint" {
+                        fingerprints.append_row(params![blob, s.hash, s.start_byte, s.end_byte])?;
+                        continue;
+                    }
+                    spans.append_row(params![
+                        blob,
+                        V,
+                        lang.name,
+                        s.kind,
+                        s.name,
+                        s.line,
+                        s.end_line,
+                        s.tokens,
+                        s.comments,
+                        s.params,
+                        (s.kind == "fn").then_some(s.hash),
+                        s.errors,
+                        s.start_byte,
+                        s.end_byte,
+                        s.depth
+                    ])?;
+                }
+                &[]
+            }
+            Content::Generated => &["file", "generated"],
+            Content::Skipped => &["file"],
+        };
+        let null = None::<i32>;
+        for kind in unparsed {
+            spans.append_row(params![
+                blob, V, lang.name, kind, null, 1, null, null, null, null, null, null, null, null,
+                null
+            ])?;
+        }
+    }
+    spans.flush()?;
+    fingerprints.flush()?;
+    drop((spans, fingerprints));
+    tx.commit()?;
     Ok(written)
 }
 
