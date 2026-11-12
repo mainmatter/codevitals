@@ -47,27 +47,11 @@ enum Cli {
     },
     /// Compute metrics into one JSON object: each metric's name maps to an array
     /// of row objects.
-    Metrics {
-        #[arg(long, default_value = "codevitals.duckdb")]
-        db: PathBuf,
-        /// File to write, replaced atomically; `-` writes to stdout.
-        output: PathBuf,
-        /// Metrics to compute; all of them when omitted.
-        #[arg(value_name = "METRIC")]
-        names: Vec<String>,
-    },
+    Metrics(Export),
     /// Compute the experimental metrics (schema `experimental`): candidates without
     /// supporting evidence yet, kept out of `metrics` and the dashboard. One JSON
     /// object, as `metrics` writes.
-    Experimental {
-        #[arg(long, default_value = "codevitals.duckdb")]
-        db: PathBuf,
-        /// File to write, replaced atomically; `-` writes to stdout.
-        output: PathBuf,
-        /// Metrics to compute; all of them when omitted.
-        #[arg(value_name = "METRIC")]
-        names: Vec<String>,
-    },
+    Experimental(Export),
     /// Report how each metric changes from BASE to HEAD, and the functions and files
     /// that account for the change, largest contribution first. Needs no scan: blobs
     /// the database lacks are parsed (with a scan that reached BASE, only those that
@@ -140,6 +124,18 @@ enum Cli {
     },
 }
 
+/// Where `metrics` and `experimental` read and write, and which views they compute.
+#[derive(clap::Args)]
+struct Export {
+    #[arg(long, default_value = "codevitals.duckdb")]
+    db: PathBuf,
+    /// File to write, replaced atomically; `-` writes to stdout.
+    output: PathBuf,
+    /// Metrics to compute; all of them when omitted.
+    #[arg(value_name = "METRIC")]
+    names: Vec<String>,
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -165,11 +161,11 @@ fn main() -> Result<()> {
             views.map(db::Views::finish).transpose()?;
             eprintln!("scanned {commits} commits, {changes} changes; parsed {blobs} blobs");
         }
-        Cli::Metrics {
+        Cli::Metrics(Export {
             db: path,
             output,
             names,
-        } => {
+        }) => {
             let mut db = open_scanned(&path)?;
             let metrics = metrics::list(&db, "metrics")?;
             ensure!(
@@ -194,11 +190,11 @@ fn main() -> Result<()> {
             write(&output, json)?;
             info!(?output, "metrics written");
         }
-        Cli::Experimental {
+        Cli::Experimental(Export {
             db: path,
             output,
             names,
-        } => {
+        }) => {
             let mut db = open_scanned(&path)?;
             let all = metrics::list(&db, "experimental")?;
             if let Some(unknown) = names.iter().find(|n| !all.contains(n)) {
