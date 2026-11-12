@@ -195,7 +195,7 @@ pub struct Row {
     /// The path the file was renamed from.
     pub source: Option<String>,
     /// The blob the change replaces, to count lines against.
-    old: Option<String>,
+    pub old: Option<String>,
     /// Lines added and deleted; `None` for a file codevitals does not parse (see
     /// `parse::parseable`), and for the deletion a rename implies.
     pub lines: Option<(i32, i32)>,

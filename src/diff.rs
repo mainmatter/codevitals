@@ -23,7 +23,23 @@ use duckdb::{Connection, params};
 use tracing::info;
 
 use crate::attributes::Attributes;
+use crate::thrash::Thrash;
 use crate::walk::{Row, diff_trees, path_text};
+
+/// The experimental edit thrash of the range: lines added and deleted again by its
+/// first-parent commits; `null` when BASE is not on HEAD's first-parent chain.
+fn thrash_json(t: Option<&Thrash>) -> String {
+    match t {
+        Some(t) => format!(
+            "{{\"commits\":{},\"added\":{},\"thrashed\":{},\"share\":{},\"validated\":false}}",
+            t.commits,
+            t.added,
+            t.thrashed,
+            json_number((t.added > 0).then(|| t.thrashed as f64 / t.added as f64))
+        ),
+        None => "null".into(),
+    }
+}
 
 /// Metrics that `cv validate` supports (item 15 of the plan decides). Every other
 /// metric's values are marked unvalidated.
@@ -237,9 +253,10 @@ pub fn diff(
             files,
         });
     }
+    let thrash = crate::thrash::thrash(repo, &base, &head)?;
     Ok(match format {
-        Format::Json => json(&base, &head, &changes),
-        Format::Text => text(&base, &head, &changes),
+        Format::Json => json(&base, &head, &changes, thrash.as_ref()),
+        Format::Text => text(&base, &head, &changes, thrash.as_ref()),
     })
 }
 
@@ -474,7 +491,12 @@ fn relative(c: &Change) -> Option<f64> {
 /// at both, the change, the relative change, whether the metric is validated, whether
 /// contributions add up to the change (else they are each function's own change in
 /// the measure), and the contributing functions and files.
-fn json(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
+fn json(
+    base: &gix::Commit,
+    head: &gix::Commit,
+    changes: &[Change],
+    thrash: Option<&Thrash>,
+) -> String {
     let units = |list: &[Contribution], function: bool| {
         let items: Vec<String> = list
             .iter()
@@ -515,17 +537,23 @@ fn json(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
         })
         .collect();
     format!(
-        "{{\"base\":{},\"head\":{},\"metrics\":[{}]}}",
+        "{{\"base\":{},\"head\":{},\"metrics\":[{}],\"experimental\":{{\"edit_thrash\":{}}}}}",
         json_text(&base.id.to_string()),
         json_text(&head.id.to_string()),
-        metrics.join(",")
+        metrics.join(","),
+        thrash_json(thrash)
     )
 }
 
 /// The change as text: per metric that changed, a line with its values and relative
 /// change, then its largest contributions (as a share of BASE's value; for tail
 /// metrics, each function's own change).
-fn text(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
+fn text(
+    base: &gix::Commit,
+    head: &gix::Commit,
+    changes: &[Change],
+    thrash: Option<&Thrash>,
+) -> String {
     let short = |c: &gix::Commit| c.id.to_string()[..10].to_owned();
     let mut out = format!("{} -> {}\n", short(base), short(head));
     let fmt = |v: Option<f64>| v.map_or("-".to_owned(), |v| format!("{v:.4}"));
@@ -560,6 +588,19 @@ fn text(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
         for f in c.files.iter().take(3) {
             writeln!(out, "  {:>8}  {} (file)", share(f.value), f.path).expect("write to String");
         }
+    }
+    match thrash {
+        Some(t) if t.added > 0 => writeln!(
+            out,
+            "edit thrash    {} of {} lines added by {} first-parent commits deleted again ({:.1}%)  experimental, unvalidated",
+            t.thrashed,
+            t.added,
+            t.commits,
+            100.0 * t.thrashed as f64 / t.added as f64
+        )
+        .expect("write to String"),
+        Some(_) => {}
+        None => out.push_str("edit thrash    - (BASE is not on HEAD's first-parent chain)\n"),
     }
     out
 }

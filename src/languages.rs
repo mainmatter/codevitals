@@ -37,8 +37,10 @@ pub const KINDS: &[&str] = &[
     // Not captured by a query: code compiled only for tests (`test`), or only when
     // test-only features are on (`test_if`, named by the features), from `@attr`.
     "test", "test_if",
-    // Not captured by a query: a winnowed hash of a window of tokens, for clones.
-    "fingerprint",
+    // Not captured by a query: a winnowed hash of a window of tokens, for clones; a
+    // pass-through function, a documented one and a function's vocabulary
+    // (`function_extras` in extract.rs); a TODO/FIXME/HACK comment.
+    "fingerprint", "forward", "doc", "vocabulary", "marker",
     // Not captured by a query: codevitals marks a blob of generated code with it.
     "generated",
 ];

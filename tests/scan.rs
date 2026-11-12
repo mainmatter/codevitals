@@ -83,7 +83,7 @@ fn fixture_tables() {
     assert_rows(
         dir,
         "select kind, count(*), count(distinct blob) from spans group by kind order by kind",
-        "(block,4,4) (file,4,4) (fn,4,4)",
+        "(block,4,4) (file,4,4) (fn,4,4) (vocabulary,4,4)",
     );
     assert_rows(
         dir,

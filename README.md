@@ -21,6 +21,7 @@ cv diff main~10 main       # each metric's change over a range, and the function
 cv hotspots                # files ranked by recent changes times decision points
 cv label                   # judge pairs of functions: which would you rather have to change?
 cv validate                # does each per-function metric predict those judgments better than size?
+cv experimental out.json   # candidate metrics without evidence yet (kept off the dashboard)
 ```
 
 `cv diff` needs no scan: it parses the blobs the database lacks (with a scan that

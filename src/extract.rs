@@ -224,10 +224,235 @@ pub fn extract(lang: Lang, src: &[u8]) -> Vec<Span> {
                     ..s.clone()
                 });
             }
+        } else if kind == "fn" {
+            let extras = node.map(|n| function_extras(n, src, &leaves, &s));
+            out.push(s);
+            out.extend(extras.into_iter().flatten());
         } else {
             out.push(s);
         }
     }
+    out.extend(markers(src, comments.keys().copied()));
+    out
+}
+
+/// Comment markers of unfinished or fragile code: TODO, FIXME, HACK, XXX (as
+/// written, upper case) and "do not touch" / "don't touch" (any case). One `marker`
+/// span per comment, named by its first marker.
+fn markers(src: &[u8], comments: impl Iterator<Item = (usize, usize)>) -> Vec<Span> {
+    let line_starts = line_starts(src);
+    let mut out = Vec::new();
+    for (start, end) in comments {
+        let text = String::from_utf8_lossy(&src[start..end]);
+        let words: Vec<&str> = text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        let lower = text.to_lowercase();
+        let found = ["TODO", "FIXME", "HACK", "XXX"]
+            .into_iter()
+            .find(|m| words.contains(m))
+            .or_else(|| {
+                ["do not touch", "don't touch", "dont touch"]
+                    .into_iter()
+                    .find(|m| lower.contains(m))
+                    .map(|_| "DO NOT TOUCH")
+            });
+        if let Some(marker) = found {
+            out.push(Span {
+                kind: "marker",
+                name: Some(marker.to_owned()),
+                line: line_of(&line_starts, start),
+                end_line: line_of(&line_starts, end.saturating_sub(1).max(start)),
+                tokens: 0,
+                comments: int(words.len()),
+                params: None,
+                hash: 0,
+                errors: None,
+                start_byte: int(start),
+                end_byte: int(end),
+                depth: 0,
+            });
+        }
+    }
+    out
+}
+
+/// Byte offsets at which lines start.
+fn line_starts(src: &[u8]) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(
+            src.iter()
+                .enumerate()
+                .filter(|(_, b)| **b == b'\n')
+                .map(|(i, _)| i + 1),
+        )
+        .collect()
+}
+
+/// The 1-based line of `byte`.
+fn line_of(starts: &[usize], byte: usize) -> i32 {
+    int(starts.partition_point(|&s| s <= byte))
+}
+
+/// Facts about one function beyond its span, each a span over the function's bytes:
+/// `forward` when its body is a single call passing on all its parameters (a
+/// pass-through wrapper); `doc` when a doc comment sits right above it (or a Python
+/// docstring opens it), `tokens` the comment's distinct subtokens and `comments` how
+/// many of them the signature has too (redundancy); `vocabulary`, `tokens` its
+/// distinct token texts (Halstead's vocabulary: operators plus operands).
+fn function_extras(node: Node, src: &[u8], leaves: &[(usize, usize, u16)], f: &Span) -> Vec<Span> {
+    let text = |n: Node| String::from_utf8_lossy(&src[n.byte_range()]).into_owned();
+    let mut out = Vec::new();
+    let with = |kind: &'static str, tokens: usize, comments: usize| Span {
+        kind,
+        tokens: int(tokens),
+        comments: int(comments),
+        name: None,
+        params: None,
+        ..f.clone()
+    };
+    let body = node.child_by_field_name("body");
+    // Vocabulary: distinct texts of the code leaves.
+    let (lo, hi) = (
+        leaves.partition_point(|l| l.0 < f.start_byte as usize),
+        leaves.partition_point(|l| l.1 <= f.end_byte as usize),
+    );
+    let vocabulary: std::collections::HashSet<&[u8]> =
+        leaves[lo..hi].iter().map(|l| &src[l.0..l.1]).collect();
+    out.push(with("vocabulary", vocabulary.len(), 0));
+    // Pass-through: the body's one statement is a call whose arguments are exactly
+    // the parameters, each once.
+    let params = node.child_by_field_name("parameters").or_else(|| {
+        node.child_by_field_name("declarator")
+            .and_then(|d| d.child_by_field_name("parameters"))
+    });
+    if let (Some(body), Some(params)) = (body, params) {
+        let names: Vec<String> = params
+            .named_children(&mut params.walk())
+            .filter(|p| !p.kind().contains("comment") && !p.kind().starts_with("self"))
+            .filter(|p| !(p.kind() == "identifier" && text(*p) == "self"))
+            .filter_map(|p| param_name(p).map(text))
+            .collect();
+        // Comments and a docstring are no statements.
+        let docstring = |n: &Node| {
+            n.kind() == "expression_statement"
+                && n.named_child(0).is_some_and(|s| s.kind() == "string")
+        };
+        let statements: Vec<Node> = body
+            .named_children(&mut body.walk())
+            .filter(|n| !n.kind().contains("comment") && !docstring(n))
+            .collect();
+        let mut call = match statements.as_slice() {
+            [one] => Some(*one),
+            [] if body.kind().ends_with("call_expression") || body.kind() == "call" => Some(body),
+            _ => None,
+        };
+        while let Some(n) = call {
+            match n.kind() {
+                "expression_statement"
+                | "return_statement"
+                | "return_expression"
+                | "await_expression" => call = n.named_child(0),
+                _ => break,
+            }
+        }
+        if let Some(call) = call.filter(|c| c.kind() == "call_expression" || c.kind() == "call") {
+            let args: Vec<String> = call
+                .child_by_field_name("arguments")
+                .map(|a| {
+                    a.named_children(&mut a.walk())
+                        .filter(|n| !n.kind().contains("comment"))
+                        .map(text)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut sorted_args = args.clone();
+            sorted_args.sort();
+            let mut sorted_names = names.clone();
+            sorted_names.sort();
+            if !names.is_empty() && sorted_args == sorted_names {
+                out.push(with("forward", f.tokens as usize, 0));
+            }
+        }
+    }
+    // Documentation: a doc comment above the function (or above what wraps it, an
+    // export or decorator), or a Python docstring.
+    let mut wrapped = node;
+    while let Some(p) = wrapped.parent().filter(|p| {
+        matches!(
+            p.kind(),
+            "export_statement"
+                | "decorated_definition"
+                | "lexical_declaration"
+                | "variable_declarator"
+        )
+    }) {
+        wrapped = p;
+    }
+    let mut above = wrapped.prev_named_sibling();
+    while let Some(n) = above.filter(|n| n.kind().ends_with("attribute_item")) {
+        above = n.prev_named_sibling();
+    }
+    let doc = above
+        .filter(|n| {
+            n.kind().contains("comment") && n.end_position().row + 1 >= wrapped.start_position().row
+        })
+        .map(text)
+        .filter(|t| t.starts_with("///") || t.starts_with("/**"))
+        .or_else(|| {
+            let first = body?.named_child(0)?;
+            (first.kind() == "expression_statement")
+                .then(|| first.named_child(0))
+                .flatten()
+                .filter(|s| s.kind() == "string")
+                .map(text)
+        });
+    if let Some(doc) = doc {
+        let comment = subtokens(&doc);
+        let signature_end = body.map_or(node.end_byte(), |b| b.start_byte());
+        let signature = subtokens(&String::from_utf8_lossy(
+            &src[node.start_byte()..signature_end],
+        ));
+        let shared = comment.intersection(&signature).count();
+        out.push(with("doc", comment.len(), shared));
+    }
+    out
+}
+
+/// The identifier a parameter binds: the parameter itself, or its pattern, name or
+/// declarator.
+fn param_name(p: Node) -> Option<Node> {
+    if p.kind() == "identifier" {
+        return Some(p);
+    }
+    for field in ["pattern", "name", "declarator", "left"] {
+        if let Some(n) = p.child_by_field_name(field) {
+            return param_name(n).or(Some(n));
+        }
+    }
+    p.named_child(0).filter(|n| n.kind() == "identifier")
+}
+
+/// The distinct lower-case subtokens of `text`: words split at non-alphanumerics,
+/// underscores and camelCase humps, of two letters or more.
+fn subtokens(text: &str) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        let mut current = String::new();
+        let mut prev_lower = false;
+        for c in word.chars() {
+            if c.is_uppercase() && prev_lower && !current.is_empty() {
+                out.insert(std::mem::take(&mut current).to_lowercase());
+            }
+            prev_lower = c.is_lowercase() || c.is_ascii_digit();
+            current.push(c);
+        }
+        if !current.is_empty() {
+            out.insert(current.to_lowercase());
+        }
+    }
+    out.retain(|w| w.chars().count() >= 2 && !w.chars().all(|c| c.is_ascii_digit()));
     out
 }
 

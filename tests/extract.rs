@@ -13,12 +13,15 @@ const STRUCTURE: [&str; 9] = [
     "unfinished",
 ];
 
+/// Kinds checked by their own tests: clones, function extras, markers.
+const EXTRAS: [&str; 5] = ["fingerprint", "forward", "doc", "vocabulary", "marker"];
+
 /// One line per span: kind name line end_line tokens comments params errors.
 fn render(spans: &[Span]) -> String {
     let opt = |v: Option<i32>| v.map_or("NULL".into(), |v| v.to_string());
     spans
         .iter()
-        .filter(|s| !STRUCTURE.contains(&s.kind) && s.kind != "fingerprint")
+        .filter(|s| !STRUCTURE.contains(&s.kind) && !EXTRAS.contains(&s.kind))
         .map(|s| {
             let name = s.name.as_deref().unwrap_or("NULL");
             let (p, e) = (opt(s.params), opt(s.errors));
@@ -606,6 +609,61 @@ fn clone_fingerprints() {
         "{a:?} {b:?}"
     );
     assert!(a.is_disjoint(&c));
+}
+
+/// Function extras: pass-through wrappers, doc comments with their overlap with
+/// the signature, vocabulary; and comment markers.
+#[test]
+fn function_extras_and_markers() {
+    let kinds = |path: &str, src: &str| {
+        extract(Lang::of(path).unwrap(), src.as_bytes())
+            .into_iter()
+            .filter(|s| ["forward", "doc", "vocabulary", "marker"].contains(&s.kind))
+            .map(|s| format!("{}:{}:{}:{}", s.kind, s.line, s.tokens, s.comments))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kinds(
+            "x.rs",
+            "/// Reads the config file.\n#[inline]\npub fn read_config(path: &str, strict: bool) -> Config {\n    load(path, strict)\n}\n\
+             fn sub(a: i32, b: i32) -> i32 { a - b }\n// TODO: remove\nfn swap(a: i32, b: i32) -> i32 { inner.go(b, a) }\n"
+        ),
+        // read_config forwards; its doc's subtokens (reads, the, config, file) share
+        // config with the signature. sub calls nothing. swap forwards in another order.
+        [
+            "vocabulary:3:17:0",
+            "forward:3:23:0",
+            "doc:3:4:1",
+            "vocabulary:6:13:0",
+            "vocabulary:8:15:0",
+            "forward:8:23:0",
+            "marker:7:0:2",
+        ]
+    );
+    assert_eq!(
+        kinds(
+            "x.py",
+            "def f(a, b):\n    \"\"\"Compute f of a and b.\"\"\"\n    return g(a, b)\n# FIXME\n"
+        ),
+        [
+            "vocabulary:1:12:0",
+            "forward:1:18:0",
+            "doc:1:3:0",
+            "marker:4:0:1"
+        ]
+    );
+    assert_eq!(
+        kinds(
+            "x.ts",
+            "/** Adds. */\nexport function add(a: number, b: number) { return plus(a, b); }\n// do not touch this\n"
+        ),
+        [
+            "vocabulary:2:14:0",
+            "forward:2:21:0",
+            "doc:2:1:0",
+            "marker:3:0:4"
+        ]
+    );
 }
 
 /// Empty input gives one `file` span in every language (compiling every query, which

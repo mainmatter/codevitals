@@ -8,7 +8,7 @@ use gix::ObjectId;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Extractor version. Bump whenever `extract` output could change for any input.
-pub const V: i32 = 5;
+pub const V: i32 = 6;
 /// Database layout version. Bump whenever a table changes; older databases are refused.
 pub const SCHEMA: i32 = 6;
 /// Commits or blobs per transaction. A transaction costs milliseconds whatever its

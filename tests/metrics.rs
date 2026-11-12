@@ -905,3 +905,37 @@ fn experimental_clones() {
     let out = succeeds(&r.dir, &["experimental", "-", "clones"]);
     assert!(out.starts_with(r#"{"clones":[{"seq":1,"#), "{out}");
 }
+
+/// Experimental structure and documentation metrics on one hand-checked file.
+#[test]
+fn experimental_snapshot_metrics() {
+    let mut r = common::Repo::new();
+    r.write(
+        "a.rs",
+        "/// Reads the input.\npub fn read(path: &str) -> String {\n    load(path)\n}\n\n\
+         pub fn undocumented(x: i32) -> i32 {\n    helper(x) + 1\n}\n\n\
+         fn helper(x: i32) -> i32 {\n    // TODO: faster\n    x * 2\n}\n\n\
+         fn load(p: &str) -> String {\n    p.to_owned()\n}\n",
+    );
+    r.commit("main", "c0\n", 0, &[]);
+    scan(&r.dir, "main");
+    let one = |view: &str, columns: &str| {
+        rows(
+            &r.dir,
+            &format!("select {columns} from experimental.{view}"),
+        )
+    };
+    // read forwards to load.
+    assert_eq!(one("pass_through", "value, count, functions"), "(0.25,1,4)");
+    // helper and load are private, uniquely named and called once each.
+    assert_eq!(
+        one("single_use", "value, count, private_functions"),
+        "(1.0,2,2)"
+    );
+    // One of the two public functions has a doc comment.
+    assert_eq!(
+        one("doc_completeness", "value, documented, public_functions"),
+        "(0.5,1,2)"
+    );
+    assert_eq!(one("markers", "count, files_with_markers"), "(1,1)");
+}

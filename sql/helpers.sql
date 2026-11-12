@@ -14,6 +14,9 @@ create or replace macro hotspot_days() as 365; -- trailing period whose changes 
 create or replace macro defect_window_days() as 182; -- windows of the defect check in cv validate
 create or replace macro orphan_months() as 12;   -- an author without a commit for this long has left
 create or replace macro cochange_min() as 3;      -- file pairs changed together this often in a window are coupled
+create or replace macro small_file_tokens() as 300; -- new files below this are small (routing around)
+create or replace macro stale_days() as 365;      -- files unchanged this long are long unchanged
+create or replace macro fix_days() as 30;         -- a fix this soon after a touch follows it (risk per touch)
 create or replace macro accretion_touches() as 3; -- files touched fewer times in a window are left out of accretion
 create or replace macro orphaned_share() as 0.5; -- files with more of their changes by departed authors are orphaned
 -- Cargo features whose code counts as test code by name alone (more may be declared

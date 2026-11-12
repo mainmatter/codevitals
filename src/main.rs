@@ -22,6 +22,7 @@ mod label;
 mod labels;
 mod metrics;
 mod parse;
+mod thrash;
 mod units;
 mod validate;
 mod walk;

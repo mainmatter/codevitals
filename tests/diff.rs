@@ -106,3 +106,34 @@ fn text_form() {
         .unwrap();
     assert!(lines[exceptions + 1].ends_with("c.rs  h"), "{text}");
 }
+
+/// Edit thrash: lines one commit of the range adds and a later one deletes.
+#[test]
+fn edit_thrash() {
+    let mut r = Repo::new();
+    r.write("a.rs", "fn a() {\n    one();\n}\n");
+    r.commit("main", "base\n", 0, &[]);
+    r.write(
+        "a.rs",
+        "fn a() {\n    one();\n    two();\n    three();\n}\n",
+    );
+    r.extend("add two lines\n", 1);
+    r.write("a.rs", "fn a() {\n    one();\n    three();\n}\n");
+    r.extend("drop one again\n", 2);
+    r.remove("a.rs").write(
+        "b.rs",
+        "fn a() {\n    one();\n    three();\n    four();\n}\n",
+    );
+    r.extend("move and add\n", 3);
+    let json = diff(&r, &["main~3", "main"]);
+    assert!(
+        json.ends_with("\"experimental\":{\"edit_thrash\":{\"commits\":3,\"added\":3,\"thrashed\":1,\"share\":0.3333333333333333,\"validated\":false}}}\n"),
+        "{json}"
+    );
+    // Not on the first-parent chain: no thrash.
+    let json = diff(&r, &["main", "main~3"]);
+    assert!(
+        json.ends_with("\"experimental\":{\"edit_thrash\":null}}\n"),
+        "{json}"
+    );
+}
