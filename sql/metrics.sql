@@ -16,8 +16,7 @@ Read: context, not a score. A step marks a bulk commit, which often moves other 
 Trend: size is the strongest single predictor of defects: judge the other trends against it.';
 
 create or replace view metrics.co_change_distance as
-with c as (select * from code_changes
-           qualify count(*) over (partition by seq) between 2 and max_commit_files()),
+with c as (select seq, path from change_weights where k >= 2),
 per_commit as (
   select a.seq, avg(tree_distance(a.path, b.path)) as distance
   from c a join c b on a.seq = b.seq and a.path < b.path group by a.seq),

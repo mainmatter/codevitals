@@ -134,11 +134,12 @@ create or replace macro path_convention(path, attr) as case
 -- and documentation files feed no metric.
 create or replace view parse_candidates as
 with newest as (
-  select path, arg_max(attr, seq) filter (blob is not null) as attr from changes group by path)
+  select path, arg_max(attr, seq) filter (blob is not null) as attr from changes group by path),
+code_paths as (
+  select path from newest where coalesce(attr, 'code') = 'code' and path_convention(path, attr) is null)
 select distinct c.blob
-from changes c join newest n using (path)
-where c.blob is not null
-  and coalesce(n.attr, 'code') = 'code' and path_convention(c.path, n.attr) is null;
+from changes c join code_paths using (path)
+where c.blob is not null;
 
 -- Each path's role, from its newest version: what .gitattributes declare (`code`:
 -- first-party whatever the conventions), else conventions, case aside.
