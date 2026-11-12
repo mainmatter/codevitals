@@ -48,7 +48,7 @@ jobs:
       contents: write
       pull-requests: read
     outputs:
-      created: ${{ steps.release-plz.outputs.releases_created }}
+      # Empty when this push released nothing.
       tag: ${{ steps.release-plz.outputs.releases_created == 'true' && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,7 +65,7 @@ jobs:
 
   binaries:
     needs: release
-    if: needs.release.outputs.created == 'true'
+    if: needs.release.outputs.tag != ''
     strategy:
       matrix:
         include:
@@ -89,7 +89,14 @@ jobs:
           # The commit release-plz just released (a draft's tag may not exist yet).
           ref: ${{ github.sha }}
           persist-credentials: false
-      # No build cache: a poisoned cache must not reach a published binary.
+      # Built with rustup, not in the Nix dev shell: Nix's compilers link against
+      # glibc (Linux) and libc++ (macOS) inside /nix/store, so the binary would only
+      # run where that exact store path exists. rustup reads the same
+      # rust-toolchain.toml, so rustc is the version CI tests with; the C/C++
+      # compiler (for DuckDB) is the runner's.
+      #
+      # No cache either: anything that can write a cache main reads could otherwise
+      # plant code in a published binary.
       - run: rustup show && rustup target add "$TARGET"
       - run: cargo build --release --locked --target "$TARGET"
       - id: package
@@ -121,19 +128,12 @@ jobs:
       # A floating tag for `uses: mainmatter/codevitals@v0.2` (or @v1 from 1.0): the
       # newest release with no breaking changes from the one it names. Before 1.0 a
       # minor bump is breaking, so the tag covers major.minor, not just major.
+      # The released commit is this run's: release-plz tags the commit it was run on.
       - run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          major="${version%%.*}"
-          if [[ "$major" == 0 ]]; then
-            floating="v0.$(cut -d. -f2 <<< "$version")"
-          else
-            floating="v$major"
-          fi
-          sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$floating" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$floating" -f sha="$sha" -F force=true >/dev/null
-          else
-            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$floating" -f sha="$sha" >/dev/null
-          fi
-          echo "$floating -> $TAG ($sha)"
+          IFS=. read -r major minor _ <<< "${TAG#v}"
+          floating="v$major"
+          [[ "$major" == 0 ]] && floating="v0.$minor"
+          # Move the tag, or create it on a new line's first release.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$floating" -f sha="$GITHUB_SHA" -F force=true >/dev/null ||
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$floating" -f sha="$GITHUB_SHA" >/dev/null
+          echo "$floating -> $TAG ($GITHUB_SHA)"

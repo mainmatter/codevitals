@@ -23,7 +23,6 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
-        set -euo pipefail
         # Run the release that the action's own ref belongs to, so the action and
         # codevitals never drift apart. Read the version from Cargo.toml at that ref
         # instead of from the ref's name: that works for tags (@v0.2.0), commit SHAs
@@ -32,14 +31,6 @@ runs:
         if [[ -z "$version" ]]; then
           echo "::error::cannot read codevitals' version from $ACTION_PATH/Cargo.toml"
           exit 1
-        fi
-        # Remote actions live at .../_actions/<owner>/<repo>/<ref>; a local one
-        # (uses: ./) is the repository being built.
-        if [[ "$ACTION_PATH" == */_actions/*/*/* ]]; then
-          ref_dir="$(dirname "$ACTION_PATH")"
-          repo="$(basename "$(dirname "$ref_dir")")/$(basename "$ref_dir")"
-        else
-          repo="$GITHUB_REPOSITORY"
         fi
         case "$RUNNER_OS-$RUNNER_ARCH" in
           Linux-X64)   target=x86_64-unknown-linux-gnu ;;
@@ -52,16 +43,15 @@ runs:
             ;;
         esac
         asset="codevitals-$target.tar.gz"
-        url="https://github.com/$repo/releases/download/v$version/$asset"
+        url="https://github.com/mainmatter/codevitals/releases/download/v$version/$asset"
         dir="$RUNNER_TEMP/codevitals-bin"
         mkdir -p "$dir"
         # A plain download, not the API: no token, no API rate limit, no gh needed
-        # on self-hosted runners.
-        if ! curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$asset" "$url"; then
-          echo "::error::cannot download $url; is v$version of $repo released (and not still a draft)?"
+        # on self-hosted runners. --retry covers timeouts and 5xx, not a missing release.
+        if ! curl -fsSL --retry 5 "$url" | tar -xz -C "$dir"; then
+          echo "::error::cannot download $url; is codevitals v$version released (and not still a draft)?"
           exit 1
         fi
-        tar -xzf "$RUNNER_TEMP/$asset" -C "$dir"
         # Not added to GITHUB_PATH: the next step calls it by path, and the caller's
         # later steps keep their PATH.
         "$dir/cv" --version
@@ -70,7 +60,6 @@ runs:
       env:
         METRICS: ${{ inputs.metrics }}
       run: |
-        set -euo pipefail
         cv="$RUNNER_TEMP/codevitals-bin/cv"
         "$cv" scan --db "$RUNNER_TEMP/codevitals.duckdb"
         # METRICS is unquoted on purpose: one argument per name, without globbing.
@@ -82,7 +71,6 @@ runs:
         BRANCH: ${{ inputs.branch }}
         TOKEN: ${{ github.token }}
       run: |
-        set -euo pipefail
         out="$RUNNER_TEMP/codevitals-publish"
         mkdir -p "$out" && cp "$RUNNER_TEMP/metrics.json" "$out/"
         cd "$out"

@@ -11,6 +11,4 @@ semver_check = false
 # Draft until every binary is attached, so the action never sees a release without
 # its binary, and immutable releases (assets locked on publish) work.
 git_release_draft = true
-git_tag_name = "v{{ version }}"
-git_release_name = "v{{ version }}"
 pr_labels = ["release"]

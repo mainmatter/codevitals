@@ -1,35 +1,93 @@
+# Tools come from Nix, pinned by flake.lock and rust-toolchain.toml, so CI runs what
+# a local `nix develop` shell has.
+#
+# Caches are saved only on main: a pull request's cache is visible to that pull
+# request alone, so saving it would only crowd main's out of the cache quota. The
+# release workflow restores no cache at all.
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; every commit on main keeps its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  # Incremental artifacts only bloat a cache that is rebuilt from scratch anyway.
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: nix develop .#ci --command bash -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup show # installs the toolchain rust-toolchain.toml pins
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: DeterminateSystems/determinate-nix-action@16f94ba7aae399b9f9077c254b6719ec6de7e3e3 # v3.24.2
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 5G
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: &cargo-paths |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock') }}
+          # Main starts over when the dependencies change, so its cache never piles
+          # up stale builds; pull requests make do with the closest older one.
+          restore-keys: ${{ github.ref != 'refs/heads/main' && format('cargo-{0}-', runner.os) || '' }}
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        # codevitals' own binaries (each linking DuckDB) are rebuilt by every run anyway.
+        run: cargo clean --package codevitals
+      - if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-paths
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # Workflow and action linting: actionlint for correctness, zizmor for security
-  # (injection, excessive permissions, unpinned actions, ...).
+  # (injection, excessive permissions, unpinned actions, cache poisoning, ...).
+  # Just the two linters, from the flake's nixpkgs: no store cache needed.
   lint-actions:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: nix shell --inputs-from . nixpkgs#actionlint nixpkgs#zizmor --command bash -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: actionlint
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
-      - name: zizmor
-        env:
+      - uses: DeterminateSystems/determinate-nix-action@16f94ba7aae399b9f9077c254b6719ec6de7e3e3 # v3.24.2
+      - run: actionlint -color
+      - env:
           GH_TOKEN: ${{ github.token }}
-        run: pipx run zizmor==1.32.0 --format=github .
+        run: zizmor --format=github .
+
+  # The single required status check for branch protection: jobs can be added or
+  # renamed here without touching the ruleset. Fails if any job failed or was
+  # cancelled, and passes only once all of them have finished.
+  ci-status:
+    if: always()
+    needs: [test, lint-actions]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
