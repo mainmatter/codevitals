@@ -23,41 +23,52 @@ fn repo() -> Repo {
     r
 }
 
-#[test]
-fn a_metric_raters_follow_is_supported() {
-    let r = repo();
-    let functions = rows(
-        &r.dir,
+/// Each production function's blob, start and end byte, and decision points.
+fn functions(dir: &tempfile::TempDir) -> Vec<Vec<String>> {
+    let rows = rows(
+        dir,
         "select blob, start_byte, end_byte, decisions from function_facts order by start_byte",
     );
-    let f: Vec<Vec<String>> = functions
-        .split(") (")
+    rows.split(") (")
         .map(|s| {
             s.trim_matches(['(', ')'])
                 .split(',')
                 .map(String::from)
                 .collect()
         })
-        .collect();
+        .collect()
+}
+
+/// A labels file line: `rater`'s `n`th judgment of functions `a` and `b` of `path`.
+fn label(
+    rater: &str,
+    n: usize,
+    a: &[String],
+    b: &[String],
+    path: &str,
+    choice: &str,
+    repeat_of: Option<usize>,
+) -> String {
+    let repeat_of = repeat_of.map_or("null".into(), |r| r.to_string());
+    format!(
+        r#"{{"rater":"{rater}","n":{n},"time":"2026-01-01T00:00:00Z","a_blob":"{}","a_start":{},"a_end":{},"a_path":"{path}","b_blob":"{}","b_start":{},"b_end":{},"b_path":"{path}","choice":"{choice}","ms":1000,"a_commits":1,"b_commits":0,"repeat_of":{repeat_of}}}"#,
+        a[0], a[1], a[2], b[0], b[1], b[2]
+    ) + "\n"
+}
+
+#[test]
+fn a_metric_raters_follow_is_supported() {
+    let r = repo();
+    let f = functions(&r.dir);
     let mut lines = String::new();
-    let n = |rater: &str,
-             a: &[String],
-             b: &[String],
-             choice: &str,
-             repeat: Option<usize>,
-             k: &mut usize| {
-        let line = format!(
-            r#"{{"rater":"{rater}","n":{k},"time":"2026-01-01T00:00:00Z","a_blob":"{}","a_start":{},"a_end":{},"a_path":"src/lib.rs","b_blob":"{}","b_start":{},"b_end":{},"b_path":"src/lib.rs","choice":"{choice}","ms":1000,"a_commits":1,"b_commits":0,"repeat_of":{}}}"#,
-            a[0],
-            a[1],
-            a[2],
-            b[0],
-            b[1],
-            b[2],
-            repeat.map_or("null".into(), |r| r.to_string())
-        );
+    let mut n = |rater: &str,
+                 a: &[String],
+                 b: &[String],
+                 choice: &str,
+                 repeat: Option<usize>,
+                 k: &mut usize| {
+        lines += &label(rater, *k, a, b, "src/lib.rs", choice, repeat);
         *k += 1;
-        line + "\n"
     };
     // Both raters choose (would rather change) the function with fewer decisions.
     for rater in ["ann", "bob"] {
@@ -72,11 +83,11 @@ fn a_metric_raters_follow_is_supported() {
                 } else {
                     "same"
                 };
-                lines += &n(rater, &f[i], &f[j], choice, None, &mut k);
+                n(rater, &f[i], &f[j], choice, None, &mut k);
             }
         }
         // One repeat, sides swapped, answered consistently.
-        lines += &n(rater, &f[1], &f[0], "b", Some(0), &mut k);
+        n(rater, &f[1], &f[0], "b", Some(0), &mut k);
     }
     std::fs::write(r.dir.path().join("labels.jsonl"), lines).unwrap();
     let labels = r.dir.path().join("labels.jsonl");
@@ -171,20 +182,9 @@ fn missing_values_decide_nothing() {
     );
     r.commit("main", "c0\n", 0, &[]);
     scan(&r.dir, "main");
-    let f = rows(
-        &r.dir,
-        "select blob, start_byte, end_byte from function_facts order by start_byte",
-    );
-    let f: Vec<Vec<&str>> = f
-        .split(") (")
-        .map(|s| s.trim_matches(['(', ')']).split(',').collect())
-        .collect();
-    let line = format!(
-        r#"{{"rater":"ann","n":0,"time":"2026-01-01T00:00:00Z","a_blob":"{}","a_start":{},"a_end":{},"a_path":"a.js","b_blob":"{}","b_start":{},"b_end":{},"b_path":"a.js","choice":"b","ms":1,"a_commits":0,"b_commits":0,"repeat_of":null}}"#,
-        f[0][0], f[0][1], f[0][2], f[1][0], f[1][1], f[1][2]
-    );
+    let f = functions(&r.dir);
     let labels = r.dir.path().join("labels.jsonl");
-    std::fs::write(&labels, line + "\n").unwrap();
+    std::fs::write(&labels, label("ann", 0, &f[0], &f[1], "a.js", "b", None)).unwrap();
     let json = succeeds(
         &r.dir,
         &[
