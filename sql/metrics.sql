@@ -230,6 +230,39 @@ Read: 1.5 means typical code is one to two blocks deep. Else-if chains stay flat
 
 Trend: rising means more conditions to keep in mind while reading. Unvalidated.';
 
+create or replace view metrics.function_decisions as
+select seq, p90 as value, max, share, functions from function_tail('decisions', many_decisions());
+
+comment on view metrics.function_decisions is 'COMPLEXITY: Decision points per function (90th percentile)
+
+What: decision points (if, loops, match arms, catch, ternaries, &&, ||) per production function: the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 10 (share).
+
+Read: 6 means nine in ten functions have at most 6 decision points. A tail value, so adding simple code elsewhere does not lower it.
+
+Trend: rising means the branchiest functions get branchier. Unvalidated.';
+
+create or replace view metrics.function_nesting as
+select seq, p90 as value, max, share, functions from function_tail('nesting', deep_nesting());
+
+comment on view metrics.function_nesting is 'COMPLEXITY: Nesting depth per function (90th percentile)
+
+What: the deepest block below the function body, per production function: the 90th percentile over functions (value), the deepest function (max), and the share of function code in functions nested more than 3 deep (share).
+
+Read: 2 means nine in ten functions nest at most two blocks below their body. Else-if chains stay flat.
+
+Trend: rising means the most deeply nested functions get deeper. Unvalidated.';
+
+create or replace view metrics.function_params as
+select seq, p90 as value, max, share, functions from function_tail('params', many_params());
+
+comment on view metrics.function_params is 'COMPLEXITY: Parameters per function (90th percentile)
+
+What: parameters per production function (self included): the 90th percentile over functions (value), the most in one function (max), and the share of function code in functions with more than 5 (share).
+
+Read: 4 means nine in ten functions take at most 4 parameters.
+
+Trend: rising means wider interfaces: more to pass, more to understand at each call. Unvalidated.';
+
 create or replace view metrics.global_state as
 select seq, 1000 * sum(global_state) / nullif(sum(tokens), 0) as value,
        map(list(lang order by lang), list(1000 * global_state / nullif(tokens, 0) order by lang)) as by_language,

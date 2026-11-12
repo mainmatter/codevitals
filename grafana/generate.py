@@ -23,6 +23,7 @@ assert set(views) == set(comments), (views, comments.keys())
 DS = {"type": "yesoreyeram-infinity-datasource", "uid": "${datasource}"}
 UNITS = {"size": "short", "co_change_distance": "none", "change_entropy": "none",
          "decisions": "none", "nesting": "none",
+         "function_decisions": "none", "function_nesting": "none", "function_params": "none",
          "global_state": "none", "exceptions": "none", "goto": "none",
          "import_distance": "none"}  # others are shares in [0, 1]
 LIFTS = {"co_change_distance", "import_distance"}  # 1 = chance; drawn as a dashed reference line
@@ -45,7 +46,9 @@ PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500"]  # one per language famil
 # Any other series (files, files per commit): violet, a hue no language family uses.
 OTHER = "#9085e9"
 SECOND_AXIS = {"size": ("files", "files"),  # an extra series on the right axis
-               "change_entropy": ("files_per_commit", "files per commit")}
+               "change_entropy": ("files_per_commit", "files per commit"),
+               "function_decisions": ("max", "max"), "function_nesting": ("max", "max"),
+               "function_params": ("max", "max")}
 LOG_SCALE = {"change_entropy"}
 BANDS = {"co_change_distance", "rework", "ownership"}  # low/high columns: two standard errors
 ROWS = {"SIZE": "Size", "CHANGES": "How changes spread", "ENTROPY": "Entropy of change",

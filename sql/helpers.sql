@@ -8,6 +8,8 @@ create or replace macro rework_days() as 7;     -- days within which a repeat ch
 create or replace macro clone_tokens() as 50;   -- smallest function counted by duplication
 create or replace macro large_tokens() as 200;  -- functions above this count toward concentration
 create or replace macro deep_nesting() as 3;    -- functions nested deeper than this count as deeply nested
+create or replace macro many_decisions() as 10;  -- functions with more decision points count as branchy
+create or replace macro many_params() as 5;      -- functions with more parameters count as wide
 create or replace macro hotspot_days() as 365; -- trailing period whose changes hotspots count
 -- Cargo features whose code counts as test code by name alone (more may be declared
 -- per path in .gitattributes: codevitals-test-features=a,b).
@@ -342,3 +344,43 @@ grid as (select c.seq, l.lang from commits c, (select distinct lang from running
 select g.seq, g.lang, r.* exclude (seq, lang)
 from grid g asof join running r on g.lang = r.lang and g.seq >= r.seq
 where r.files > 0;
+
+-- Per-function measures over production code at every commit, as histograms built
+-- from change points: for each measure (decisions, nesting, params) and value, the
+-- functions with that value and their tokens. Commits times values, not commits
+-- times functions.
+create or replace view function_histograms as
+with f as (
+  select v.since, v.until, x.tokens, x.decisions, x.nesting, x.params
+  from versions v join path_roles r on r.path = v.path and r.role = 'code'
+  join function_facts x using (blob, test_features)),
+m as (
+  select since, until, tokens, measure, value from f
+  unpivot (value for measure in (decisions, nesting, params))
+  where value is not null),
+deltas as (
+  select measure, value, seq, sum(n) as n, sum(t) as t from (
+    select measure, value, since as seq, 1 as n, tokens as t from m
+    union all select measure, value, until, -1, -tokens from m)
+  group by all),
+running as (
+  select measure, value, seq, sum(n) over w as n, sum(t) over w as t
+  from deltas window w as (partition by measure, value order by seq)),
+grid as (
+  select c.seq, k.measure, k.value from commits c, (select distinct measure, value from running) k)
+select g.seq, g.measure, g.value, r.n, r.t
+from grid g asof join running r on g.measure = r.measure and g.value = r.value and g.seq >= r.seq
+where r.n > 0;
+
+-- Tail statistics per commit and measure: the 90th percentile (nearest rank) and the
+-- maximum over functions, and the share of function tokens in functions above
+-- `threshold`.
+create or replace macro function_tail(which, threshold) as table
+with h as (select * from function_histograms where measure = which),
+c as (select *, sum(n) over (partition by seq order by value) as cumulative,
+             sum(n) over (partition by seq) as functions, sum(t) over (partition by seq) as tokens
+      from h)
+select seq, min(value) filter (cumulative >= 0.9 * functions) as p90, max(value) as max,
+       coalesce(sum(t) filter (value > threshold), 0) / any_value(tokens) as share,
+       any_value(functions) as functions
+from c group by seq;

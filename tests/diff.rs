@@ -76,7 +76,7 @@ fn contributions_add_up() {
                 .skip(1)
                 .map(|s| s[..s.find('}').unwrap()].parse::<f64>().unwrap())
                 .sum();
-            if !metric.starts_with("\"duplication\"") {
+            if metric.contains("\"additive\":true") {
                 assert!(
                     (sum - change).abs() < 1e-9,
                     "{list} of {metric}: {sum} vs {change}"

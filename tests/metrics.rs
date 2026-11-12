@@ -72,6 +72,15 @@ fn metric_views() {
             "select seq, value from metrics.decisions",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
         ),
+        // Parameters: add (2), then plus (2), then d (0); nine in ten take at most 2.
+        (
+            "select seq, value, max, share, functions from metrics.function_params",
+            "(0,2,2,0.0,1) (1,2,2,0.0,2) (2,2,2,0.0,2) (3,2,2,0.0,3)",
+        ),
+        (
+            "select seq, value, max from metrics.function_decisions",
+            "(0,0,0) (1,0,0) (2,0,0) (3,0,0)",
+        ),
         (
             "select seq, value from metrics.global_state",
             "(0,0.0) (1,0.0) (2,0.0) (3,0.0)",
@@ -422,6 +431,31 @@ fn change_points_match_per_commit_sums() {
         duplication.contains("(4,1.0)") && duplication.contains("(6,0.0)"),
         "{duplication}"
     );
+    // The per-function tails, from histograms by change points, equal the nearest-rank
+    // 90th percentile, maximum and share over the live functions commit by commit.
+    for (measure, threshold) in [
+        ("decisions", "many_decisions()"),
+        ("nesting", "deep_nesting()"),
+        ("params", "many_params()"),
+    ] {
+        let naive = format!(
+            "with f as (
+               select c.seq, x.{measure} as v, x.tokens
+               from commits c join files l on l.since <= c.seq and c.seq < l.until
+               join path_roles p on p.path = l.path and p.role = 'code'
+               join function_facts x on x.blob = l.blob and x.test_features = l.test_features
+               where x.{measure} is not null),
+             r as (select *, row_number() over (partition by seq order by v) as k,
+                          count(*) over (partition by seq) as n from f)
+             select seq, min(v) filter (k >= ceil(0.9 * n)), max(v),
+                    round(coalesce(sum(tokens) filter (v > {threshold}), 0) / sum(tokens), 9)
+             from r group by seq order by seq"
+        );
+        let metric = format!(
+            "select seq, value, max, round(share, 9) from metrics.function_{measure} order by seq"
+        );
+        assert_eq!(rows(&r.dir, &metric), rows(&r.dir, &naive), "{measure}");
+    }
     // Not vacuous: C appears at seq 5 and is gone from seq 7.
     assert!(
         expected.contains("(5,c,1,") && !expected.contains("(7,c,"),

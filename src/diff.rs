@@ -102,6 +102,14 @@ const SPECS: &[Spec] = &[
 /// Metrics `diff` reports without contributions: their units are not additive.
 const WHOLE: &[&str] = &["duplication"];
 
+/// Tail metrics of a per-function measure (a column of `unit_rows`): not additive, so
+/// the functions listed are those whose measure changed most, by that change.
+const TAILS: &[(&str, &str)] = &[
+    ("function_decisions", "decisions"),
+    ("function_nesting", "nesting"),
+    ("function_params", "params"),
+];
+
 /// One unit's share of a metric's change.
 struct Contribution {
     kind: String,
@@ -114,6 +122,8 @@ struct Contribution {
 /// A metric's change from BASE to HEAD.
 struct Change {
     metric: String,
+    /// Whether contributions add up to the change.
+    additive: bool,
     base: Option<f64>,
     head: Option<f64>,
     functions: Vec<Contribution>,
@@ -166,10 +176,25 @@ pub fn diff(
             .collect::<Result<_, _>>()?;
         let at = |seq| values.iter().find(|v| v.0 == seq).and_then(|v| v.1);
         let (b, h) = (at(0), at(1));
+        if let Some((_, measure)) = TAILS.iter().find(|t| t.0 == metric) {
+            if b.is_some() || h.is_some() {
+                let functions = measure_changes(&db, measure, top)?;
+                changes.push(Change {
+                    metric,
+                    additive: false,
+                    base: b,
+                    head: h,
+                    functions,
+                    files: vec![],
+                });
+            }
+            continue;
+        }
         let Some(spec) = SPECS.iter().find(|s| s.metric == metric) else {
             if WHOLE.contains(&metric.as_str()) && (b.is_some() || h.is_some()) {
                 changes.push(Change {
                     metric,
+                    additive: false,
                     base: b,
                     head: h,
                     functions: vec![],
@@ -184,6 +209,7 @@ pub fn diff(
         let (functions, files) = contributions(&db, spec, top)?;
         changes.push(Change {
             metric,
+            additive: true,
             base: b,
             head: h,
             functions,
@@ -306,12 +332,13 @@ sums as (select s, lineage, sum(own_tokens) as tokens, sum(decisions) as decisio
 select s, 'function' as kind, function as id, lineage, path, qualified as name, lang,
        own_tokens as tokens, tokens as fn_tokens, decisions, throws, gotos, 0 as global_state,
        tokens * nesting as nested_tokens, if(tokens > large_tokens(), tokens, 0) as large_tokens,
-       if(public, 0, tokens) as private_tokens
+       if(public, 0, tokens) as private_tokens, nesting, params
 from fn
 union all
 select f.s, 'file', f.lineage || ' (outside functions)', f.lineage, f.path, '(outside functions)', f.lang,
        f.tokens - coalesce(u.tokens, 0), 0, f.decisions - coalesce(u.decisions, 0),
-       f.throws - coalesce(u.throws, 0), f.gotos - coalesce(u.gotos, 0), f.global_state, 0, 0, 0
+       f.throws - coalesce(u.throws, 0), f.gotos - coalesce(u.gotos, 0), f.global_state, 0, 0, 0,
+       null, null
 from f left join sums u using (s, lineage);
 ";
 
@@ -370,6 +397,30 @@ fn contributions(
     Ok(rows.into_iter().partition(|c| c.kind == "function"))
 }
 
+/// The `top` functions whose `measure` changed most, by that change (a function
+/// added counts from 0, one removed to 0).
+fn measure_changes(db: &Connection, measure: &str, top: usize) -> Result<Vec<Contribution>> {
+    let query = format!(
+        "select id, coalesce(arg_max(path, s), ''), any_value(name),
+                coalesce(max({measure}) filter (s = 1), 0) - coalesce(max({measure}) filter (s = 0), 0) as change
+         from unit_rows where kind = 'function' group by id
+         having change <> 0 order by abs(change) desc, id limit {top}"
+    );
+    let rows = db
+        .prepare(&query)?
+        .query_map([], |r| {
+            Ok(Contribution {
+                kind: "function".into(),
+                id: r.get(0)?,
+                path: r.get(1)?,
+                name: r.get(2)?,
+                value: r.get::<_, i64>(3)? as f64,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 fn json_text(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -397,8 +448,9 @@ fn relative(c: &Change) -> Option<f64> {
 }
 
 /// The change as one JSON object: base and head commits, then per metric its values
-/// at both, the change, the relative change, whether the metric is validated, and the
-/// contributing functions and files.
+/// at both, the change, the relative change, whether the metric is validated, whether
+/// contributions add up to the change (else they are each function's own change in
+/// the measure), and the contributing functions and files.
 fn json(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
     let units = |list: &[Contribution], function: bool| {
         let items: Vec<String> = list
@@ -426,9 +478,10 @@ fn json(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
         .map(|c| {
             let change = c.base.zip(c.head).map(|(b, h)| h - b);
             format!(
-                "{{\"metric\":{},\"validated\":{},\"base\":{},\"head\":{},\"change\":{},\"relative\":{},\"functions\":{},\"files\":{}}}",
+                "{{\"metric\":{},\"validated\":{},\"additive\":{},\"base\":{},\"head\":{},\"change\":{},\"relative\":{},\"functions\":{},\"files\":{}}}",
                 json_text(&c.metric),
                 VALIDATED.contains(&c.metric.as_str()),
+                c.additive,
                 json_number(c.base),
                 json_number(c.head),
                 json_number(change),
@@ -447,7 +500,8 @@ fn json(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
 }
 
 /// The change as text: per metric that changed, a line with its values and relative
-/// change, then its largest contributions (as a share of BASE's value).
+/// change, then its largest contributions (as a share of BASE's value; for tail
+/// metrics, each function's own change).
 fn text(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
     let short = |c: &gix::Commit| c.id.to_string()[..10].to_owned();
     let mut out = format!("{} -> {}\n", short(base), short(head));
@@ -471,7 +525,7 @@ fn text(base: &gix::Commit, head: &gix::Commit, changes: &[Change]) -> String {
         if same {
             continue;
         }
-        let base = c.base.filter(|b| *b != 0.0);
+        let base = c.base.filter(|b| *b != 0.0 && c.additive);
         let share = |v: f64| match base {
             Some(b) => format!("{:+.1}%", 100.0 * v / b.abs()),
             None => format!("{v:+.4}"),
