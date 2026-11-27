@@ -5,6 +5,11 @@ and parses every file version with tree-sitter into a DuckDB file, then computes
 metrics over it in SQL: size, complexity, how changes spread, and
 how files depend on each other. Rust, C, C++, Python, TypeScript and JavaScript.
 
+> [!NOTE]
+> This project has been created by [Mainmatter].
+> 
+> Check out our [landing page][Mainmatter] if you're looking for Rust consulting or training!
+
 ## Install
 
 Download a binary from the [releases](https://github.com/mainmatter/codevitals/releases),
@@ -112,3 +117,5 @@ Languages are rows in `src/languages.rs` with a query in `langs/`.
 ## License
 
 [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.
+
+[mainmatter]: https://mainmatter.com/rust-consulting/ "Team Up With Us for Rust! | Rust consulting | Mainmatter"
