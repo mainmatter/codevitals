@@ -116,6 +116,6 @@ Languages are rows in `src/languages.rs` with a query in `langs/`.
 
 ## License
 
-Gerust is developed by and © Mainmatter GmbH and contributors. It is releaser under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.
+Codevitals is developed by and © Mainmatter GmbH and contributors. It is releaser under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.
 
 [mainmatter]: https://mainmatter.com/rust-consulting/ "Team Up With Us for Rust! | Rust consulting | Mainmatter"
